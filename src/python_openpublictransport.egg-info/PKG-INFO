@@ -1,0 +1,14 @@
+Metadata-Version: 2.4
+Name: python-openpublictransport
+Version: 0.1.2
+Summary: Python library for public transport APIs (EFA, OTP2, TRIAS, FPTF, HAFAS, GTFS-RT)
+License: MIT
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: aiohttp>=3.9
+Requires-Dist: aiofiles>=23.0
+Requires-Dist: gtfs-realtime-bindings>=1.0.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.23; extra == "dev"
+Requires-Dist: aioresponses>=0.7; extra == "dev"

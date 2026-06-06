@@ -29,6 +29,8 @@ PROVIDER_VBN_OTP = "vbn_otp"
 PROVIDER_VBN_TRIAS = "vbn_trias"
 PROVIDER_OPT = "openpublictransport"
 PROVIDER_OTP_CUSTOM = "otp_custom"
+PROVIDER_NATIONAL_RAIL = "national_rail"
+PROVIDER_REJSEPLANEN = "rejseplanen"
 
 # API base URLs
 API_BASE_URL_VRR = "https://openservice-test.vrr.de/static03/XML_DM_REQUEST"
