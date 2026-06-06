@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 import aiohttp
 
 from ..const import PROVIDER_REJSEPLANEN
+from ..exceptions import AuthenticationError
 from ..models import UnifiedDeparture
 from .base import BaseProvider
 
@@ -103,6 +104,10 @@ class RejseplanenProvider(BaseProvider):
         )
         try:
             async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                if resp.status in (401, 403):
+                    raise AuthenticationError(
+                        f"{self.provider_name}: authentication failed (HTTP {resp.status}) — check API key"
+                    )
                 if resp.status != 200:
                     _LOGGER.warning("%s: HTTP %s for station %s", self.provider_name, resp.status, station_id)
                     return None

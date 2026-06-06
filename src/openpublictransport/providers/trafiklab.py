@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional, Union
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
+from ..exceptions import AuthenticationError
+
 import aiohttp
 from aiohttp import ClientConnectorError
 
@@ -131,9 +133,10 @@ class TrafiklabProvider(BaseProvider):
                     elif response.status == 404:
                         _LOGGER.warning("Trafiklab API endpoint not found (404)")
                         return None
-                    elif response.status == 401:
-                        _LOGGER.warning("Trafiklab API authentication failed (401) - check API key")
-                        return None
+                    elif response.status in (401, 403):
+                        raise AuthenticationError(
+                            f"Trafiklab: authentication failed (HTTP {response.status}) — check API key"
+                        )
                     elif response.status >= 500:
                         _LOGGER.warning(
                             "Trafiklab API server error (status %s) on attempt %d/%d",
@@ -243,9 +246,10 @@ class TrafiklabProvider(BaseProvider):
                             results.append(result)
 
                         return results
-                    elif response.status == 401:
-                        _LOGGER.error("Trafiklab API authentication failed (401) - check API key")
-                        return []
+                    elif response.status in (401, 403):
+                        raise AuthenticationError(
+                            f"Trafiklab: authentication failed (HTTP {response.status}) — check API key"
+                        )
                     elif response.status == 404:
                         _LOGGER.warning("Trafiklab API endpoint not found (404)")
                         return []

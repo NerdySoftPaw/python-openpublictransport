@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional, Union
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
+from ..exceptions import AuthenticationError
+
 import aiohttp
 
 from ..const import PROVIDER_RMV
@@ -126,8 +128,10 @@ class RMVProvider(BaseProvider):
                     if isinstance(departures, dict):
                         departures = [departures]
                     return {"stopEvents": departures}
-                elif response.status == 401:
-                    _LOGGER.error("RMV API: invalid API key")
+                elif response.status in (401, 403):
+                    raise AuthenticationError(
+                        f"RMV: authentication failed (HTTP {response.status}) — check API key"
+                    )
                 else:
                     _LOGGER.warning("RMV API returned status %s", response.status)
         except aiohttp.ClientError as e:
@@ -264,8 +268,14 @@ class RMVProvider(BaseProvider):
                             }
                         )
                     return results
+                elif response.status in (401, 403):
+                    raise AuthenticationError(
+                        f"RMV: authentication failed (HTTP {response.status}) — check API key"
+                    )
                 else:
                     _LOGGER.error("RMV API returned status %s", response.status)
+        except AuthenticationError:
+            raise
         except Exception as e:
             _LOGGER.error("Error searching RMV stops: %s", e)
 

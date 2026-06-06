@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 import aiohttp
 
 from ..const import PROVIDER_NATIONAL_RAIL
+from ..exceptions import AuthenticationError
 from ..models import UnifiedDeparture
 from .base import BaseProvider
 
@@ -118,6 +119,10 @@ class NationalRailProvider(BaseProvider):
                 },
                 timeout=aiohttp.ClientTimeout(total=15),
             ) as resp:
+                if resp.status in (401, 403):
+                    raise AuthenticationError(
+                        f"{self.provider_name}: authentication failed (HTTP {resp.status}) — check API key"
+                    )
                 if resp.status != 200:
                     _LOGGER.warning("%s: HTTP %s for CRS %s", self.provider_name, resp.status, crs)
                     return None
