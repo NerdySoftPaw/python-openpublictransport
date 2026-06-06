@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Union
 from zoneinfo import ZoneInfo
 
+from ..exceptions import AuthenticationError
+
 import aiohttp
 from aiohttp import ClientConnectorError
 
@@ -217,13 +219,14 @@ class NTAProvider(BaseProvider):
                     elif response.status == 404:
                         _LOGGER.warning("NTA API endpoint not found (404)")
                         return None
-                    elif response.status == 401:
+                    elif response.status in (401, 403):
                         if self.api_key_secondary and current_api_key == self.api_key:
-                            _LOGGER.info("NTA Primary API key failed (401), trying Secondary key...")
+                            _LOGGER.info("NTA primary key failed (HTTP %s), trying secondary...", response.status)
                             current_api_key = self.api_key_secondary
                             continue
-                        _LOGGER.warning("NTA API authentication failed (401) - check API key(s)")
-                        return None
+                        raise AuthenticationError(
+                            f"NTA: authentication failed (HTTP {response.status}) — check API key(s)"
+                        )
                     elif response.status >= 500:
                         _LOGGER.warning(
                             "NTA API server error (status %s) on attempt %d/%d",

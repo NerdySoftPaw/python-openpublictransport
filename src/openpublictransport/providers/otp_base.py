@@ -3,6 +3,8 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
+
+from ..exceptions import AuthenticationError
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
@@ -86,6 +88,10 @@ class OTPBaseProvider(BaseProvider):
                     return await resp.json()
                 if resp.status == 204:
                     return None
+                if resp.status in (401, 403):
+                    raise AuthenticationError(
+                        f"{self.provider_name}: authentication failed (HTTP {resp.status}) — check API key"
+                    )
                 _LOGGER.warning("%s OTP %s → HTTP %s", self.provider_name, url, resp.status)
         except aiohttp.ClientError as exc:
             _LOGGER.warning("%s OTP request failed: %s", self.provider_name, exc)

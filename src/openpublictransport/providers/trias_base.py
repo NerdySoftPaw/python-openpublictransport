@@ -3,6 +3,8 @@
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
+
+from ..exceptions import AuthenticationError
 from xml.etree import ElementTree as ET
 from zoneinfo import ZoneInfo
 
@@ -140,6 +142,10 @@ class TRIASBaseProvider(BaseProvider):
                 if response.status == 200:
                     text = await response.text()
                     return ET.fromstring(text)
+                elif response.status in (401, 403):
+                    raise AuthenticationError(
+                        f"{self.provider_name}: authentication failed (HTTP {response.status}) — check API key"
+                    )
                 else:
                     _LOGGER.warning("%s TRIAS API returned status %s", self.provider_name, response.status)
         except aiohttp.ClientError as e:
