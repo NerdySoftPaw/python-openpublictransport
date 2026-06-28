@@ -38,15 +38,47 @@ _PRODUCT_MAPPING: Dict[str, str] = {
 
 
 def _parse_hafas_time(date_str: str, time_str: str, tz: Any) -> Optional[datetime]:
-    """Parse Rejseplanen date (DD.MM.YY) and time (HH:MM) into a timezone-aware datetime."""
+    """Parse a Rejseplanen date + time into a timezone-aware datetime.
+
+    The HAFAS REST API at www.rejseplanen.dk returns ISO dates (YYYY-MM-DD) and
+    times as HH:MM:SS; older HAFAS deployments used DD.MM.YY / HH:MM. Handle both.
+    """
     if not date_str or not time_str:
         return None
+    time_fmt = "%H:%M:%S" if time_str.count(":") == 2 else "%H:%M"
+    date_fmt = "%Y-%m-%d" if "-" in date_str else "%d.%m.%y"
     try:
-        time_fmt = "%H:%M:%S" if time_str.count(":") == 2 else "%H:%M"
-        dt = datetime.strptime(f"{date_str} {time_str}", f"%d.%m.%y {time_fmt}")
+        dt = datetime.strptime(f"{date_str} {time_str}", f"{date_fmt} {time_fmt}")
         return dt.replace(tzinfo=tz)
     except ValueError:
         return None
+
+
+def _resolve_transport_type(stop: Dict[str, Any]) -> str:
+    """Derive the transport type from the HAFAS product category.
+
+    The departure's top-level ``type`` is a stop type (e.g. "ST"), not the
+    product, so read the category from ``Product[].catOut`` and fall back to the
+    line name (e.g. "Bus 250S", "Metro M4", "Re 1277").
+    """
+    products = stop.get("Product", [])
+    if isinstance(products, dict):
+        products = [products]
+    cat = ""
+    if products and isinstance(products[0], dict):
+        p = products[0]
+        cat = (p.get("catOut") or p.get("catOutL") or p.get("catIn") or "").strip()
+    text = f"{cat} {stop.get('name', '')}".lower()
+    if "bus" in text:  # Bus, Togbus (rail-replacement), Natbus, Expresbus
+        return "bus"
+    if "metro" in text:
+        return "subway"
+    if "letbane" in text or "tram" in text:
+        return "tram"
+    if "færge" in text or "ferry" in text or "havnebus" in text:
+        return "ferry"
+    # Everything else (IC, ICL, Lyn, Re, Reg, Tog, S-tog, RJ, EC/ECE, …) is rail.
+    return "train"
 
 
 class RejseplanenProvider(BaseProvider):
@@ -122,8 +154,11 @@ class RejseplanenProvider(BaseProvider):
             _LOGGER.warning("%s: API error %s: %s", self.provider_name, data.get("errorCode"), data.get("errorText"))
             return None
 
-        board = data.get("DepartureBoard", {})
-        departures = board.get("Departure", [])
+        # www.rejseplanen.dk returns "Departure" at the top level; older HAFAS
+        # deployments nested it under "DepartureBoard". Support both.
+        departures = data.get("Departure")
+        if departures is None:
+            departures = data.get("DepartureBoard", {}).get("Departure", [])
         if isinstance(departures, dict):
             departures = [departures]
 
@@ -156,8 +191,7 @@ class RejseplanenProvider(BaseProvider):
             delay = max(0, int((actual_dt - planned_dt).total_seconds() / 60))
             minutes_until = max(0, int((actual_dt - now).total_seconds() / 60))
 
-            type_str = stop.get("type", "").upper()
-            transport_type = _PRODUCT_MAPPING.get(type_str, "train")
+            transport_type = _resolve_transport_type(stop)
 
             line = stop.get("name", "")
             destination = stop.get("direction", stop.get("finalStop", ""))
@@ -223,13 +257,20 @@ class RejseplanenProvider(BaseProvider):
         if not isinstance(data, dict):
             return []
 
-        location_list = data.get("LocationList", {})
-        stops = location_list.get("StopLocation", [])
-        if isinstance(stops, dict):
-            stops = [stops]
+        # www.rejseplanen.dk returns "stopLocationOrCoordLocation" (a list whose
+        # entries wrap a StopLocation or CoordLocation); older HAFAS deployments
+        # used LocationList.StopLocation. Support both.
+        entries = data.get("stopLocationOrCoordLocation")
+        if entries is None:
+            entries = data.get("LocationList", {}).get("StopLocation", [])
+        if isinstance(entries, dict):
+            entries = [entries]
 
         results = []
-        for loc in stops:
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            loc = entry.get("StopLocation", entry)
             if not isinstance(loc, dict):
                 continue
             station_id = loc.get("extId") or loc.get("id", "")
