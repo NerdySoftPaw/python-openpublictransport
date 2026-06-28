@@ -17,6 +17,28 @@ from .base import BaseProvider
 _LOGGER = logging.getLogger(__name__)
 
 
+def _transport_type_from_name(name: str) -> str:
+    """Best-effort transport type from an EFA product name.
+
+    Used as a fallback when the numeric product class is not in a provider's
+    mapping (e.g. KVV Regionalbus class 6), so unmapped classes are not dropped
+    as "unknown". Checks subway/tram before the generic "bahn" → train.
+    """
+    n = (name or "").lower()
+    if "u-bahn" in n or "u_bahn" in n or "ubahn" in n or "subway" in n or "metro" in n:
+        return "subway"
+    if "straßenbahn" in n or "strassenbahn" in n or "stadtbahn" in n or "tram" in n:
+        return "tram"
+    if "fähre" in n or "faehre" in n or "schiff" in n or "ferry" in n:
+        return "ferry"
+    if "bus" in n or "ast" in n or "ruf" in n or "ersatz" in n:
+        # Stadt-/Regional-/Schnell-/Nachtbus, AST, Rufbus, (Schienen-)Ersatzverkehr
+        return "bus"
+    if "bahn" in n or "zug" in n or "train" in n:  # S-Bahn, Regionalbahn, Zug, …
+        return "train"
+    return "unknown"
+
+
 class EFABaseProvider(BaseProvider):
     """Base class for all EFA-based providers (VRR, KVV, HVV, MVV, etc.)."""
 
@@ -123,9 +145,13 @@ class EFABaseProvider(BaseProvider):
             product_class = product.get("class", 0)
             transport_type = type_mapping.get(product_class, "unknown")
             if transport_type == "unknown":
+                # Fall back to the product name so unmapped classes aren't dropped.
+                transport_type = _transport_type_from_name(product.get("name", ""))
+            if transport_type == "unknown":
                 _LOGGER.debug(
-                    "Unknown transport class %s for line %s",
+                    "Unknown transport class %s / name %r for line %s",
                     product_class,
+                    product.get("name"),
                     transportation.get("number", "unknown"),
                 )
             return transport_type
