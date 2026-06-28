@@ -44,6 +44,8 @@ KVV_TRANSPORTATION_TYPES = {
     1: "train",
     4: "tram",
     5: "bus",
+    6: "bus",  # Regionalbus (e.g. KVV line 106)
+    7: "bus",  # Schnellbus
 }
 
 HVV_TRANSPORTATION_TYPES = {
