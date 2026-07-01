@@ -274,10 +274,22 @@ class NationalRailProvider(BaseProvider):
         )
 
     async def search_stops(self, search_term: str) -> List[Dict[str, Any]]:
-        """Find UK railway stations with CRS codes via Overpass API (OSM)."""
-        escaped = re.sub(r"[.*+?^${}()|[\]\\]", r"\\\g<0>", search_term)
+        """Find UK railway stations with CRS codes via Overpass API (OSM).
 
-        query = f"""[out:json][timeout:15];
+        A search term that looks like a 3-letter CRS code (e.g. "WIN", "RDG")
+        is matched directly against the ``ref:crs`` tag; anything else is
+        matched against the station name(s).
+        """
+        term = search_term.strip()
+
+        if re.fullmatch(r"[A-Za-z]{3}", term):
+            # Direct CRS code lookup (ref:crs is stored uppercase in OSM)
+            query = f"""[out:json][timeout:15];
+node["railway"="station"]["ref:crs"="{term.upper()}"]({_UK_BBOX});
+out 10;"""
+        else:
+            escaped = re.sub(r"[.*+?^${}()|[\]\\]", r"\\\g<0>", term)
+            query = f"""[out:json][timeout:15];
 (
   node["railway"="station"]["ref:crs"]["name"~"{escaped}",i]({_UK_BBOX});
   node["railway"="station"]["ref:crs"]["official_name"~"{escaped}",i]({_UK_BBOX});
