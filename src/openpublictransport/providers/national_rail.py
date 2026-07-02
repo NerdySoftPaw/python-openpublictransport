@@ -4,9 +4,11 @@ Stop search uses the Overpass API (OSM) to find UK railway stations with
 ref:crs tags, returning the 3-letter CRS code used by OpenLDBWS.
 """
 
+import json
 import logging
 import re
 from datetime import datetime, timedelta
+from importlib import resources
 from typing import Any, Dict, List, Optional
 from xml.etree import ElementTree as ET
 from zoneinfo import ZoneInfo
@@ -43,6 +45,40 @@ _SOAP_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
     </ldb:GetDepartureBoardRequest>
   </soap:Body>
 </soap:Envelope>"""
+
+
+# Bundled offline snapshot of UK stations (CRS + name), used ONLY as a fallback
+# when the live Overpass API is unreachable or rate-limited. It is a point-in-time
+# extract and is NOT kept continuously up to date — new/renamed stations may be
+# missing until the snapshot is regenerated. Overpass remains the source of truth.
+_STATIC_STATIONS: Optional[List[Dict[str, Any]]] = None
+
+
+def _load_static_stations() -> List[Dict[str, Any]]:
+    """Load and cache the bundled UK station snapshot (lazy, read once)."""
+    global _STATIC_STATIONS
+    if _STATIC_STATIONS is None:
+        try:
+            raw = (
+                resources.files("openpublictransport")
+                .joinpath("data/uk_stations.json")
+                .read_text(encoding="utf-8")
+            )
+            _STATIC_STATIONS = json.loads(raw)
+        except Exception as exc:  # pragma: no cover - defensive
+            _LOGGER.warning("National Rail (UK): could not load station snapshot: %s", exc)
+            _STATIC_STATIONS = []
+    return _STATIC_STATIONS
+
+
+def _static_result(station: Dict[str, Any]) -> Dict[str, Any]:
+    """Map a snapshot entry to the search-result shape used by the provider."""
+    return {
+        "id": station.get("crs", ""),
+        "name": station.get("name", ""),
+        "place": station.get("operator", ""),
+        "area_type": "stop",
+    }
 
 
 def _strip_namespaces(xml_string: str) -> str:
@@ -281,14 +317,60 @@ class NationalRailProvider(BaseProvider):
         )
 
     async def search_stops(self, search_term: str) -> List[Dict[str, Any]]:
-        """Find UK railway stations with CRS codes via Overpass API (OSM).
+        """Find UK railway stations with their CRS codes.
+
+        The live Overpass API (OpenStreetMap) is the source of truth. Only if it
+        is unreachable, rate-limited, or returns nothing do we fall back to a
+        bundled offline snapshot — see :func:`_load_static_stations`.
 
         A search term that looks like a 3-letter CRS code (e.g. "WIN", "RDG")
-        is matched directly against the ``ref:crs`` tag; anything else is
-        matched against the station name(s).
+        is matched directly against the CRS code; anything else is matched
+        against the station name(s).
         """
         term = search_term.strip()
+        if not term:
+            return []
 
+        results = await self._search_overpass(term)
+        if results:
+            return results
+
+        # Overpass down / throttled / empty → use the offline snapshot.
+        fallback = self._search_static(term)
+        if fallback:
+            _LOGGER.info(
+                "%s: Overpass returned nothing for %r — served %d result(s) from the "
+                "bundled station snapshot (may be out of date)",
+                self.provider_name,
+                term,
+                len(fallback),
+            )
+        return fallback
+
+    def _search_static(self, term: str) -> List[Dict[str, Any]]:
+        """Match ``term`` against the bundled offline station snapshot."""
+        stations = _load_static_stations()
+        if not stations:
+            return []
+
+        results: List[Dict[str, Any]] = []
+        if re.fullmatch(r"[A-Za-z]{3}", term):
+            code = term.upper()
+            for st in stations:
+                if st.get("crs") == code:
+                    results.append(_static_result(st))
+        else:
+            needle = term.casefold()
+            for st in stations:
+                names = [st.get("name", "")] + list(st.get("aka", []))
+                if any(needle in n.casefold() for n in names if n):
+                    results.append(_static_result(st))
+                    if len(results) >= 10:
+                        break
+        return results[:10]
+
+    async def _search_overpass(self, term: str) -> List[Dict[str, Any]]:
+        """Query the live Overpass API for UK stations matching ``term``."""
         if re.fullmatch(r"[A-Za-z]{3}", term):
             # Direct CRS code lookup (ref:crs is stored uppercase in OSM)
             query = f"""[out:json][timeout:15];
