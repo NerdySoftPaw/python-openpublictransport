@@ -46,10 +46,17 @@ _SOAP_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 
 
 def _strip_namespaces(xml_string: str) -> str:
-    """Remove XML namespace prefixes and declarations for simpler parsing."""
+    """Remove XML namespace prefixes and declarations for simpler parsing.
+
+    Real OpenLDBWS responses use namespace prefixes that contain digits
+    (``lt4:``, ``lt5:``, ``lt7:``, ``lt8:`` …). The prefix pattern must
+    therefore allow digits — matching only ``[a-zA-Z]+`` leaves those tags
+    prefixed after their xmlns declarations have been stripped, producing an
+    "unbound prefix" XML parse error and an empty departure board.
+    """
     xml_string = re.sub(r' xmlns[^=]*="[^"]*"', "", xml_string)
-    xml_string = re.sub(r"<([a-zA-Z]+):", "<", xml_string)
-    xml_string = re.sub(r"</([a-zA-Z]+):", "</", xml_string)
+    xml_string = re.sub(r"<([A-Za-z][\w.\-]*):", "<", xml_string)
+    xml_string = re.sub(r"</([A-Za-z][\w.\-]*):", "</", xml_string)
     return xml_string
 
 
