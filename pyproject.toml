@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "python-openpublictransport"
-version = "0.1.10"
+version = "0.1.11"
 description = "Python library for public transport APIs (EFA, OTP2, TRIAS, FPTF, HAFAS, GTFS-RT)"
 readme = "README.md"
 license = { text = "MIT" }

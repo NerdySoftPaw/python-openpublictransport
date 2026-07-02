@@ -320,8 +320,11 @@ class NationalRailProvider(BaseProvider):
         """Find UK railway stations with their CRS codes.
 
         The live Overpass API (OpenStreetMap) is the source of truth. Only if it
-        is unreachable, rate-limited, or returns nothing do we fall back to a
-        bundled offline snapshot — see :func:`_load_static_stations`.
+        is unreachable or rate-limited (a *failure*, not a successful empty
+        result) do we fall back to a bundled offline snapshot — see
+        :func:`_load_static_stations`. When Overpass succeeds and legitimately
+        finds nothing, we return that empty result rather than serving
+        potentially out-of-date snapshot data.
 
         A search term that looks like a 3-letter CRS code (e.g. "WIN", "RDG")
         is matched directly against the CRS code; anything else is matched
@@ -332,14 +335,15 @@ class NationalRailProvider(BaseProvider):
             return []
 
         results = await self._search_overpass(term)
-        if results:
+        if results is not None:
+            # Overpass answered authoritatively (possibly with zero matches).
             return results
 
-        # Overpass down / throttled / empty → use the offline snapshot.
+        # Overpass failed (unreachable / throttled) → use the offline snapshot.
         fallback = self._search_static(term)
         if fallback:
             _LOGGER.info(
-                "%s: Overpass returned nothing for %r — served %d result(s) from the "
+                "%s: Overpass unavailable for %r — served %d result(s) from the "
                 "bundled station snapshot (may be out of date)",
                 self.provider_name,
                 term,
@@ -369,8 +373,13 @@ class NationalRailProvider(BaseProvider):
                         break
         return results[:10]
 
-    async def _search_overpass(self, term: str) -> List[Dict[str, Any]]:
-        """Query the live Overpass API for UK stations matching ``term``."""
+    async def _search_overpass(self, term: str) -> Optional[List[Dict[str, Any]]]:
+        """Query the live Overpass API for UK stations matching ``term``.
+
+        Returns a (possibly empty) list on a successful query, or ``None`` if
+        the request failed (non-200 / exception) so the caller can decide
+        whether to fall back to the offline snapshot.
+        """
         if re.fullmatch(r"[A-Za-z]{3}", term):
             # Direct CRS code lookup (ref:crs is stored uppercase in OSM)
             query = f"""[out:json][timeout:15];
@@ -397,11 +406,11 @@ out 10;"""
             ) as resp:
                 if resp.status != 200:
                     _LOGGER.warning("%s: Overpass HTTP %s", self.provider_name, resp.status)
-                    return []
+                    return None
                 data = await resp.json(content_type=None)
         except Exception as exc:
             _LOGGER.warning("%s: stop search failed: %s", self.provider_name, exc)
-            return []
+            return None
 
         results = []
         for element in data.get("elements", []):
