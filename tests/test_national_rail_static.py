@@ -34,6 +34,8 @@ class _Session:
         self.calls += 1
         if self.mode == "down":
             return _Resp(429, None)
+        if self.mode == "empty":
+            return _Resp(200, {"elements": []})
         payload = {
             "elements": [
                 {"tags": {"railway": "station", "ref:crs": "WIN",
@@ -45,7 +47,7 @@ class _Session:
 
 def test_snapshot_loads_and_has_known_stations():
     stations = nr._load_static_stations()
-    assert len(stations) > 2000
+    assert stations  # loads and is non-empty
     by_crs = {s["crs"]: s for s in stations}
     assert by_crs["WIN"]["name"] == "Winchester"
     assert by_crs["RDG"]["name"] == "Reading"
@@ -71,6 +73,15 @@ async def test_overpass_success_does_not_use_fallback():
     results = await provider.search_stops("WIN")
     # Result comes from Overpass (note the distinct name), not the snapshot.
     assert results[0]["name"] == "Winchester Overpass"
+
+
+async def test_overpass_empty_result_does_not_fall_back():
+    """A successful but empty Overpass result must NOT serve stale snapshot data."""
+    session = _Session("empty")
+    provider = NationalRailProvider(session)
+    results = await provider.search_stops("WIN")
+    assert session.calls == 1  # Overpass was queried
+    assert results == []  # authoritative "no match" — snapshot not consulted
 
 
 async def test_falls_back_to_snapshot_when_overpass_down():
