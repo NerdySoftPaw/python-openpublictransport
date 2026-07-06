@@ -55,6 +55,13 @@ SAMPLE = """<?xml version="1.0" encoding="utf-8"?>
 </soap:Envelope>"""
 
 
+def test_ldbws_request_uses_consistent_version_triple():
+    """SOAPAction must be the 2012-01-13 value; a mismatch yields HTTP 500."""
+    assert nr._ENDPOINT.endswith("ldb12.asmx")
+    assert nr._SOAP_ACTION == "http://thalesgroup.com/RTTI/2012-01-13/ldb/GetDepartureBoard"
+    assert 'xmlns:ldb="http://thalesgroup.com/RTTI/2021-11-01/ldb/"' in nr._SOAP_TEMPLATE
+
+
 def test_strip_namespaces_handles_digit_prefixes():
     """Digit-bearing prefixes must be stripped so the XML parses."""
     stripped = nr._strip_namespaces(SAMPLE)

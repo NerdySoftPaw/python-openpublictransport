@@ -4,6 +4,7 @@ Stop search uses the Overpass API (OSM) to find UK railway stations with
 ref:crs tags, returning the 3-letter CRS code used by OpenLDBWS.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -22,8 +23,16 @@ from .base import BaseProvider
 
 _LOGGER = logging.getLogger(__name__)
 
-_ENDPOINT = "https://lite.realtime.nationalrail.co.uk/OpenLDBWS/ldb11.asmx"
-_SOAP_ACTION = "http://thalesgroup.com/RTTI/2017-10-01/ldb/GetDepartureBoard"
+# Use the same LDBWS version triple as the reference OpenLDBWS clients:
+#   endpoint  = ldb12.asmx  (WSDL ver=2021-11-01)
+#   body ns   = 2021-11-01/ldb/
+#   SOAPAction= 2012-01-13/ldb/GetDepartureBoard
+# The SOAPAction is version-pinned to 2012-01-13 (it does NOT track the body's
+# ldb version); sending a mismatched SOAPAction makes the ASMX service reject the
+# request with an HTTP 500 SOAP fault ("did not recognize the value of the
+# SOAPAction header").
+_ENDPOINT = "https://lite.realtime.nationalrail.co.uk/OpenLDBWS/ldb12.asmx"
+_SOAP_ACTION = "http://thalesgroup.com/RTTI/2012-01-13/ldb/GetDepartureBoard"
 _OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
 # UK bounding box (lat_min, lon_min, lat_max, lon_max)
@@ -31,7 +40,7 @@ _UK_BBOX = "49,-11,62,2"
 
 _SOAP_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
-               xmlns:ldb="http://thalesgroup.com/RTTI/2017-10-01/ldb/"
+               xmlns:ldb="http://thalesgroup.com/RTTI/2021-11-01/ldb/"
                xmlns:tok="http://thalesgroup.com/RTTI/2013-11-28/Token/types">
   <soap:Header>
     <tok:AccessToken>
@@ -79,6 +88,16 @@ def _static_result(station: Dict[str, Any]) -> Dict[str, Any]:
         "place": station.get("operator", ""),
         "area_type": "stop",
     }
+
+
+def _soap_fault_string(body: str) -> str:
+    """Best-effort extraction of a SOAP fault reason from an error response."""
+    if not body:
+        return ""
+    m = re.search(r"<(?:\w+:)?(?:faultstring|Text|Reason)[^>]*>(.*?)</", body, re.DOTALL | re.IGNORECASE)
+    if m:
+        return m.group(1).strip()[:200]
+    return body.strip()[:200]
 
 
 def _strip_namespaces(xml_string: str) -> str:
@@ -167,7 +186,21 @@ class NationalRailProvider(BaseProvider):
                         f"{self.provider_name}: authentication failed (HTTP {resp.status}) — check API key"
                     )
                 if resp.status != 200:
-                    _LOGGER.warning("%s: HTTP %s for CRS %s", self.provider_name, resp.status, crs)
+                    # Surface the SOAP fault reason (HTTP 500) instead of hiding it,
+                    # so genuine request/token faults are diagnosable.
+                    body = ""
+                    try:
+                        body = await resp.text()
+                    except Exception:  # pragma: no cover - defensive
+                        pass
+                    fault = _soap_fault_string(body)
+                    _LOGGER.warning(
+                        "%s: HTTP %s for CRS %s%s",
+                        self.provider_name,
+                        resp.status,
+                        crs,
+                        f" — {fault}" if fault else "",
+                    )
                     return None
                 text = await resp.text()
         except Exception as exc:
@@ -340,7 +373,7 @@ class NationalRailProvider(BaseProvider):
             return results
 
         # Overpass failed (unreachable / throttled) → use the offline snapshot.
-        fallback = self._search_static(term)
+        fallback = await self._search_static(term)
         if fallback:
             _LOGGER.info(
                 "%s: Overpass unavailable for %r — served %d result(s) from the "
@@ -351,9 +384,14 @@ class NationalRailProvider(BaseProvider):
             )
         return fallback
 
-    def _search_static(self, term: str) -> List[Dict[str, Any]]:
-        """Match ``term`` against the bundled offline station snapshot."""
-        stations = _load_static_stations()
+    async def _search_static(self, term: str) -> List[Dict[str, Any]]:
+        """Match ``term`` against the bundled offline station snapshot.
+
+        The snapshot is read from disk on first use; that read is dispatched to
+        an executor so it never blocks the event loop (results are cached, so
+        subsequent calls do no I/O).
+        """
+        stations = await asyncio.get_running_loop().run_in_executor(None, _load_static_stations)
         if not stations:
             return []
 
