@@ -53,17 +53,17 @@ def test_snapshot_loads_and_has_known_stations():
     assert by_crs["RDG"]["name"] == "Reading"
 
 
-def test_static_search_by_crs_code():
+async def test_static_search_by_crs_code():
     provider = NationalRailProvider(_Session("down"))
-    results = provider._search_static("rdg")
+    results = await provider._search_static("rdg")
     assert results == [
         {"id": "RDG", "name": "Reading", "place": "Network Rail", "area_type": "stop"}
     ]
 
 
-def test_static_search_by_name():
+async def test_static_search_by_name():
     provider = NationalRailProvider(_Session("down"))
-    results = provider._search_static("winchester")
+    results = await provider._search_static("winchester")
     assert any(r["id"] == "WIN" and r["name"] == "Winchester" for r in results)
 
 
