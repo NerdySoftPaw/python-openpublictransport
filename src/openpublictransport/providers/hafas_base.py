@@ -22,13 +22,13 @@ public transport endpoints. Note that dataset documents the modern
 source of base URLs, timezones and product definitions for new subclasses.
 """
 
+import html
 import json
 import logging
 import re
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import quote, urlencode
-from xml.etree import ElementTree as ET
 from zoneinfo import ZoneInfo
 
 import aiohttp
@@ -49,6 +49,8 @@ DEFAULT_CATEGORY_MAPPING: Dict[str, str] = {
     # regional / local trains
     "IR": "train", "IRE": "train", "RE": "train", "RB": "train", "REX": "train",
     "CJX": "train", "R": "train", "S": "train", "SB": "train", "BRB": "train",
+    "SPR": "train",  # NL Sprinter
+    "TER": "train",  # French regional express (cross-border, e.g. LU/FR)
     # metro / underground
     "U": "subway", "U-BAHN": "subway", "UBAHN": "subway", "METRO": "subway",
     # tram
@@ -77,6 +79,22 @@ DEFAULT_CLASS_MAPPING: Dict[int, str] = {
     1024: "on_demand",
     2048: "on_demand",
 }
+
+
+# The station board is parsed with regexes rather than an XML parser: some
+# deployments (e.g. LU/mobilitéit.lu) emit invalid XML — a literal ``<br>``
+# inside an HIM ``lead="…"`` attribute — which makes a strict parser reject the
+# whole document. We only need the well-formed ``<Journey …>`` opening-tag
+# attributes; HIM notices are extracted best-effort.
+_JOURNEY_RE = re.compile(r"<Journey\b([^>]*?)(?:/>|>(.*?)</Journey>)", re.S)
+_ATTR_RE = re.compile(r'([\w:-]+)\s*=\s*"([^"]*)"')
+_HIM_RE = re.compile(r"<HIMMessage\b([^>]*?)/?>", re.S)
+_ERR_RE = re.compile(r'<Err\b[^>]*\bcode="([^"]*)"[^>]*(?:\btext="([^"]*)")?', re.S)
+
+
+def _attrs(fragment: str) -> Dict[str, str]:
+    """Parse ``key="value"`` pairs from a tag fragment, unescaping entities."""
+    return {k: html.unescape(v) for k, v in _ATTR_RE.findall(fragment)}
 
 
 def _line_from_prod(prod: str) -> str:
@@ -228,33 +246,35 @@ class HafasBaseProvider(BaseProvider):
         return {"stopEvents": self._parse_board(raw)}
 
     def _parse_board(self, raw: bytes) -> List[Dict[str, Any]]:
-        # ``ET.fromstring`` honours the ``<?xml encoding="ISO-8859-1"?>``
-        # declaration when handed the raw bytes.
-        try:
-            root = ET.fromstring(raw)
-        except ET.ParseError as e:
-            _LOGGER.warning("%s station board XML parse error: %s", self.provider_name, e)
-            return []
+        # HAFAS Scotty boards are ISO-8859-1; decoding is lossless and never
+        # raises, and entities in attribute values are unescaped in ``_attrs``.
+        text = raw.decode("iso-8859-1", "replace")
 
-        if root.tag == "Err":
-            _LOGGER.warning(
-                "%s station board error %s: %s",
-                self.provider_name,
-                root.get("code"),
-                root.get("text"),
-            )
-            return []
+        events = [
+            self._journey_to_dict(m.group(1), m.group(2))
+            for m in _JOURNEY_RE.finditer(text)
+        ]
 
-        return [self._journey_to_dict(journey) for journey in root.iter("Journey")]
+        if not events:
+            err = _ERR_RE.search(text)
+            if err:
+                _LOGGER.warning(
+                    "%s station board error %s: %s",
+                    self.provider_name,
+                    err.group(1),
+                    err.group(2) or "",
+                )
+        return events
 
     @staticmethod
-    def _journey_to_dict(journey: ET.Element) -> Dict[str, Any]:
-        attr = journey.attrib
+    def _journey_to_dict(opening: str, inner: Optional[str]) -> Dict[str, Any]:
+        attr = _attrs(opening)
         notices: List[str] = []
-        for him in journey.findall("HIMMessage"):
-            text = (him.get("header") or him.get("lead") or "").strip()
-            if text and text not in notices:
-                notices.append(text)
+        for him in _HIM_RE.finditer(inner or ""):
+            ha = _attrs(him.group(1))
+            note = (ha.get("header") or ha.get("lead") or "").strip()
+            if note and note not in notices:
+                notices.append(note)
         return {
             "fpTime": attr.get("fpTime", ""),
             "fpDate": attr.get("fpDate", ""),
@@ -276,9 +296,16 @@ class HafasBaseProvider(BaseProvider):
             time_str = stop.get("fpTime", "")
             if not date_str or not time_str:
                 return None
-            try:
-                planned_naive = datetime.strptime(f"{date_str} {time_str}", "%d.%m.%Y %H:%M")
-            except ValueError:
+            # Deployments differ: ÖBB reports a 4-digit year ("14.07.2026"),
+            # NL/LU a 2-digit one ("14.07.26").
+            planned_naive = None
+            for fmt in ("%d.%m.%Y %H:%M", "%d.%m.%y %H:%M"):
+                try:
+                    planned_naive = datetime.strptime(f"{date_str} {time_str}", fmt)
+                    break
+                except ValueError:
+                    continue
+            if planned_naive is None:
                 return None
 
             # fpTime/fpDate are already local wall-clock time for the endpoint.

@@ -161,3 +161,66 @@ def test_oebb_configuration():
     assert isinstance(p, HafasBaseProvider)
     # ÖBB-specific category extension present.
     assert p.get_category_mapping()["CJX"] == "train"
+
+
+# -- cross-country generalisation (NL / LU) ---------------------------------
+
+# NL (NS): 2-digit year, Sprinter (SPR) product, "+ 120" delay.
+SAMPLE_BOARD_NL = """<?xml version="1.0" encoding="ISO-8859-1"?>
+<StationTable>
+<Journey fpTime="18:01" fpDate="14.07.26" delay="+ 120" e_delay="120" platform="5" targetLoc="Innsbruck Hbf" prod="NJ 421#NJ" class="2" dir="Innsbruck Hbf" hafasname="NJ 421" />
+<Journey fpTime="19:22" fpDate="14.07.26" delay="0" e_delay="0" platform="5a" targetLoc="Uitgeest" prod="SPR 8273#SPR" class="8" dir="Uitgeest" hafasname="SPR 8273" />
+</StationTable>"""
+
+# LU (mobilitéit.lu): 2-digit year AND invalid XML — a raw <br> inside the HIM
+# lead attribute that would break a strict XML parser.
+SAMPLE_BOARD_LU = """<?xml version="1.0" encoding="ISO-8859-1"?>
+<StationTable>
+<Journey fpTime="19:20" fpDate="14.07.26" delay="0" platform="5" targetLoc="Rodange, Gare" prod="RE   468#RE" dir="Rodange, Gare" ><HIMMessage header="Delay 468" id="64303" lead="Due to the delay of the previous trip this train is delayed.<br>Please check our timetable." display="6" /></Journey>
+<Journey fpTime="19:39" fpDate="14.07.26" delay="-" targetLoc="Metz-Ville" prod="TER88613#TER" dir="Metz-Ville" hafasname="TER88613" />
+</StationTable>"""
+
+NOW_NL = datetime(2026, 7, 14, 18, 0, tzinfo=ZoneInfo("Europe/Amsterdam"))
+
+
+def test_two_digit_year_parses():
+    p = _provider()
+    events = p._parse_board(SAMPLE_BOARD_NL.encode("iso-8859-1"))
+    dep = p.parse_departure(events[0], ZoneInfo("Europe/Amsterdam"), NOW_NL)
+    assert dep is not None
+    assert dep.planned_time == "18:01"
+    assert dep.departure_time == "20:01"       # +120 min
+    assert dep.delay == 120
+    assert dep.transportation_type == "train"  # NJ
+
+
+def test_sprinter_and_ter_map_to_train():
+    p = _provider()
+    nl = p._parse_board(SAMPLE_BOARD_NL.encode("iso-8859-1"))
+    assert p._transport_type(nl[1]) == "train"   # SPR
+    lu = p._parse_board(SAMPLE_BOARD_LU.encode("iso-8859-1"))
+    assert p._transport_type(lu[1]) == "train"   # TER (no class attr → category)
+
+
+def test_malformed_him_xml_does_not_break_board():
+    """LU's literal <br> inside an HIM attribute must not lose journeys."""
+    p = _provider()
+    events = p._parse_board(SAMPLE_BOARD_LU.encode("iso-8859-1"))
+    assert len(events) == 2                       # both journeys survive
+    assert events[0]["notices"] == ["Delay 468"]  # HIM header still extracted
+    dep = p.parse_departure(events[0], ZoneInfo("Europe/Luxembourg"), NOW_NL)
+    assert dep is not None and dep.transportation_type == "train"
+
+
+# -- NL / LU subclass wiring ------------------------------------------------
+
+def test_nl_lu_providers_registered():
+    from openpublictransport.providers import get_provider_class
+    from openpublictransport.providers.ns import NSProvider
+    from openpublictransport.providers.mobiliteit_lu import MobiliteitLuProvider
+
+    assert get_provider_class("ns_nl") is NSProvider
+    assert get_provider_class("mobiliteit_lu") is MobiliteitLuProvider
+    assert NSProvider(session=None).get_timezone() == "Europe/Amsterdam"
+    assert MobiliteitLuProvider(session=None).get_timezone() == "Europe/Luxembourg"
+    assert NSProvider(session=None).hafas_base_url == "https://hafas.bene-system.com/bin"
