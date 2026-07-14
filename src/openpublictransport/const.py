@@ -31,6 +31,8 @@ PROVIDER_OPT = "openpublictransport"
 PROVIDER_OTP_CUSTOM = "otp_custom"
 PROVIDER_NATIONAL_RAIL = "national_rail"
 PROVIDER_REJSEPLANEN = "rejseplanen"
+PROVIDER_NS_NL = "ns_nl"
+PROVIDER_MOBILITEIT_LU = "mobiliteit_lu"
 
 # API base URLs
 API_BASE_URL_VRR = "https://openservice-test.vrr.de/static03/XML_DM_REQUEST"
