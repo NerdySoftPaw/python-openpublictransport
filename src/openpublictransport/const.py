@@ -33,6 +33,11 @@ PROVIDER_NATIONAL_RAIL = "national_rail"
 PROVIDER_REJSEPLANEN = "rejseplanen"
 PROVIDER_NS_NL = "ns_nl"
 PROVIDER_MOBILITEIT_LU = "mobiliteit_lu"
+PROVIDER_ENTUR_NO = "entur_no"
+PROVIDER_BART_US = "bart_us"
+PROVIDER_DART_US = "dart_us"
+PROVIDER_IRISHRAIL_IE = "irishrail_ie"
+PROVIDER_TPG_CH = "tpg_ch"
 
 # API base URLs
 API_BASE_URL_VRR = "https://openservice-test.vrr.de/static03/XML_DM_REQUEST"

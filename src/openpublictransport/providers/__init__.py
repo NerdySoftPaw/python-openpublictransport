@@ -36,6 +36,11 @@ from ..const import (
     PROVIDER_REJSEPLANEN,
     PROVIDER_NS_NL,
     PROVIDER_MOBILITEIT_LU,
+    PROVIDER_ENTUR_NO,
+    PROVIDER_BART_US,
+    PROVIDER_DART_US,
+    PROVIDER_IRISHRAIL_IE,
+    PROVIDER_TPG_CH,
 )
 from .avv import AVVProvider
 from .base import BaseProvider
@@ -69,6 +74,11 @@ from .national_rail import NationalRailProvider
 from .rejseplanen import RejseplanenProvider
 from .ns import NSProvider
 from .mobiliteit_lu import MobiliteitLuProvider
+from .entur import EnturProvider
+from .bart import BARTProvider
+from .dart import DARTProvider
+from .irishrail import IrishRailProvider
+from .tpg import TPGProvider
 
 _PROVIDER_REGISTRY: Dict[str, Type[BaseProvider]] = {}
 
@@ -146,3 +156,8 @@ register_provider(PROVIDER_NATIONAL_RAIL, NationalRailProvider)
 register_provider(PROVIDER_REJSEPLANEN, RejseplanenProvider)
 register_provider(PROVIDER_NS_NL, NSProvider)
 register_provider(PROVIDER_MOBILITEIT_LU, MobiliteitLuProvider)
+register_provider(PROVIDER_ENTUR_NO, EnturProvider)
+register_provider(PROVIDER_BART_US, BARTProvider)
+register_provider(PROVIDER_DART_US, DARTProvider)
+register_provider(PROVIDER_IRISHRAIL_IE, IrishRailProvider)
+register_provider(PROVIDER_TPG_CH, TPGProvider)
