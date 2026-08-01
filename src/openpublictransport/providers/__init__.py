@@ -11,6 +11,7 @@ from ..const import (
     PROVIDER_DB,
     PROVIDER_DING,
     PROVIDER_HVV,
+    PROVIDER_HVV_GTI,
     PROVIDER_KVV,
     PROVIDER_MVV,
     PROVIDER_NTA_IE,
@@ -51,6 +52,7 @@ from .db import DBProvider
 from .ding import DINGProvider
 from .gtfsde import OPTProvider
 from .hvv import HVVProvider
+from .hvv_gti import HVVGTIProvider
 from .kvv import KVVProvider
 from .mvv import MVVProvider
 from .nta import NTAProvider
@@ -161,3 +163,4 @@ register_provider(PROVIDER_BART_US, BARTProvider)
 register_provider(PROVIDER_DART_US, DARTProvider)
 register_provider(PROVIDER_IRISHRAIL_IE, IrishRailProvider)
 register_provider(PROVIDER_TPG_CH, TPGProvider)
+register_provider(PROVIDER_HVV_GTI, HVVGTIProvider)
