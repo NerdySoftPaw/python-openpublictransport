@@ -31,10 +31,8 @@ class HVVProvider(EFABaseProvider):
     def get_transport_type_mapping(self) -> Dict[Any, str]:
         return HVV_TRANSPORTATION_TYPES
 
-    def get_platform_fn(self) -> Callable[[Dict[str, Any]], str]:
-        return lambda s: (
-            s.get("location", {}).get("properties", {}).get("platform") or s.get("location", {}).get("platformName", "")
-        )
+    # location.properties.platform is now the EFABaseProvider default, so this
+    # provider no longer needs its own override.
 
     def get_realtime_fn(self) -> Callable[[Dict[str, Any], Optional[str], Optional[str]], bool]:
         return lambda s, est, plan: est != plan if est and plan else False

@@ -1,6 +1,7 @@
 """Common parsing utilities for all providers."""
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional, Union
 from zoneinfo import ZoneInfo
@@ -8,6 +9,29 @@ from zoneinfo import ZoneInfo
 from .models import UnifiedDeparture
 
 _LOGGER = logging.getLogger(__name__)
+
+# Human-readable platform labels APIs prefix onto the bare track identifier:
+# "Gleis 3", "Bstg. 12", "Steig B", "Platform 4", "Pl. 2", "Track 1".
+_PLATFORM_LABEL_RE = re.compile(
+    r"^(?:gleis|bstg\.?|bahnsteig|steig|platform|plattform|pl\.|track|quai|voie|spor|perron)\s*",
+    re.IGNORECASE,
+)
+
+
+def normalize_platform(value: Any) -> str:
+    """Reduce a platform value to its bare identifier, lowercased.
+
+    ``"Gleis 3"``, ``"gleis 3"`` and ``"3"`` all normalize to ``"3"``. Used to
+    compare a technical platform value against a human-readable one without
+    reporting a spurious platform change, and re-used by consumers that want to
+    match user input like ``platform: 3`` against whatever the provider returns.
+    """
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    return _PLATFORM_LABEL_RE.sub("", text).strip().casefold()
 
 
 def _parse_dt(s: str) -> Optional[datetime]:
@@ -18,6 +42,13 @@ def _parse_dt(s: str) -> Optional[datetime]:
         return None
 
 
+def _default_planned_platform_fn(stop: Dict[str, Any]) -> str:
+    """Legacy planned-platform lookup used when a provider supplies none."""
+    platform = stop.get("platform")
+    planned_name = platform.get("plannedName") if isinstance(platform, dict) else None
+    return stop.get("plannedPlatformName") or planned_name or ""
+
+
 def parse_departure_generic(
     stop: Dict[str, Any],
     tz: Union[ZoneInfo, Any],
@@ -25,6 +56,8 @@ def parse_departure_generic(
     get_transport_type_fn: Callable[[Dict[str, Any]], str],
     get_platform_fn: Callable[[Dict[str, Any]], str],
     get_realtime_fn: Callable[[Dict[str, Any], Optional[str], Optional[str]], bool],
+    get_planned_platform_fn: Optional[Callable[[Dict[str, Any]], str]] = None,
+    get_platform_name_fn: Optional[Callable[[Dict[str, Any]], str]] = None,
 ) -> Optional[UnifiedDeparture]:
     """Generic parser for departure data — shared logic across all providers."""
     try:
@@ -75,6 +108,7 @@ def parse_departure_generic(
 
         transport_type = get_transport_type_fn(transportation)
         platform = get_platform_fn(stop)
+        platform_name = get_platform_name_fn(stop) if get_platform_name_fn else ""
 
         time_diff = estimated_local - now
         minutes_until = max(0, int(time_diff.total_seconds() / 60))
@@ -93,10 +127,13 @@ def parse_departure_generic(
                 if text and isinstance(text, str):
                     notices.append(text.strip())
 
-        planned_platform = stop.get("plannedPlatformName") or stop.get("platform", {}).get("plannedName")
-        actual_platform = platform
+        planned_fn = get_planned_platform_fn or _default_planned_platform_fn
+        planned_platform = planned_fn(stop)
+        # Compare normalized values: providers mix the technical identifier
+        # ("3") with the human-readable label ("Gleis 3") across the actual and
+        # planned fields, and those are the same platform, not a change.
         platform_changed = bool(
-            planned_platform and actual_platform and str(planned_platform).strip() != str(actual_platform).strip()
+            planned_platform and platform and normalize_platform(planned_platform) != normalize_platform(platform)
         )
 
         return UnifiedDeparture(
@@ -115,6 +152,7 @@ def parse_departure_generic(
             notices=notices if notices else None,
             planned_platform=str(planned_platform).strip() if planned_platform and platform_changed else None,
             platform_changed=platform_changed,
+            platform_name=str(platform_name).strip() or None,
         )
 
     except Exception as e:

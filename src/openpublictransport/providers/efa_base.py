@@ -4,7 +4,7 @@ import asyncio
 import logging
 from abc import abstractmethod
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
@@ -39,6 +39,52 @@ def _transport_type_from_name(name: str) -> str:
     return "unknown"
 
 
+def _location_and_properties(stop: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Return (location, location.properties) from an EFA stop event."""
+    location = stop.get("location")
+    if not isinstance(location, dict):
+        return {}, {}
+    properties = location.get("properties")
+    return location, properties if isinstance(properties, dict) else {}
+
+
+def _efa_platform(stop: Dict[str, Any]) -> str:
+    """Technical platform/track of an EFA stop event.
+
+    EFA's RapidJSON carries the track under ``location.properties.platform``.
+    Prefer that technical value ("3") over the human-readable ``platformName``
+    / ``disassembledName`` ("Gleis 3"): the readable form is only populated for
+    rail platforms, while bus and tram stops still have the technical
+    identifier (issue #56).
+
+    The last two fallbacks are the pre-RapidJSON shape, kept so older or
+    non-standard EFA deployments keep working.
+    """
+    location, properties = _location_and_properties(stop)
+    legacy = stop.get("platform")
+    legacy_name = legacy.get("name") if isinstance(legacy, dict) else None
+    return (
+        properties.get("platform")
+        or properties.get("platformName")
+        or location.get("disassembledName")
+        or legacy_name
+        or stop.get("platformName")
+        or ""
+    )
+
+
+def _efa_platform_name(stop: Dict[str, Any]) -> str:
+    """Human-readable platform label ("Gleis 3"), when EFA supplies one."""
+    location, properties = _location_and_properties(stop)
+    return properties.get("platformName") or location.get("disassembledName") or ""
+
+
+def _efa_planned_platform(stop: Dict[str, Any]) -> str:
+    """Scheduled platform, for detecting a real-time platform change."""
+    _, properties = _location_and_properties(stop)
+    return properties.get("plannedPlatform") or properties.get("plannedPlatformName") or ""
+
+
 class EFABaseProvider(BaseProvider):
     """Base class for all EFA-based providers (VRR, KVV, HVV, MVV, etc.)."""
 
@@ -53,8 +99,16 @@ class EFABaseProvider(BaseProvider):
         """Return the base URL for stop finder requests."""
 
     def get_platform_fn(self) -> Callable[[Dict[str, Any]], str]:
-        """Return function to extract platform from stop event."""
-        return lambda s: s.get("platform", {}).get("name") or s.get("platformName", "")
+        """Return function to extract the technical platform from a stop event."""
+        return _efa_platform
+
+    def get_platform_name_fn(self) -> Callable[[Dict[str, Any]], str]:
+        """Return function to extract the human-readable platform label."""
+        return _efa_platform_name
+
+    def get_planned_platform_fn(self) -> Callable[[Dict[str, Any]], str]:
+        """Return function to extract the scheduled platform."""
+        return _efa_planned_platform
 
     def get_realtime_fn(self) -> Callable[[Dict[str, Any], Optional[str], Optional[str]], bool]:
         """Return function to detect realtime data."""
@@ -163,6 +217,8 @@ class EFABaseProvider(BaseProvider):
             get_transport_type_fn=determine_transport_type,
             get_platform_fn=self.get_platform_fn(),
             get_realtime_fn=self.get_realtime_fn(),
+            get_planned_platform_fn=self.get_planned_platform_fn(),
+            get_platform_name_fn=self.get_platform_name_fn(),
         )
 
     async def search_stops(self, search_term: str) -> List[Dict[str, Any]]:

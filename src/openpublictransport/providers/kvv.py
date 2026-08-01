@@ -31,8 +31,9 @@ class KVVProvider(EFABaseProvider):
     def get_transport_type_mapping(self) -> Dict[Any, str]:
         return KVV_TRANSPORTATION_TYPES
 
-    def get_platform_fn(self) -> Callable[[Dict[str, Any]], str]:
-        return lambda s: s.get("location", {}).get("disassembledName") or s.get("platformName", "")
+    # Platform comes from EFABaseProvider: location.properties.platform, with
+    # location.disassembledName ("Gleis 3") still a fallback and now exposed
+    # separately as platform_name.
 
     def get_realtime_fn(self) -> Callable[[Dict[str, Any], Optional[str], Optional[str]], bool]:
         return lambda s, est, plan: s.get("isRealtimeControlled", False)
