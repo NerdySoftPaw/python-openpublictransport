@@ -183,6 +183,8 @@ def test_normalize_platform():
     assert normalize_platform("Track 1") == "1"
     assert normalize_platform(None) == ""
     assert normalize_platform("") == ""
-    # A platform genuinely named "Gleis" keeps a usable value
-    assert normalize_platform("Gleis") == ""
     assert normalize_platform(3) == "3"
+    # A bare label with no identifier after it normalizes away to nothing.
+    # Harmless: an empty value never takes part in a platform_changed
+    # decision, which requires both sides to be non-empty.
+    assert normalize_platform("Gleis") == ""

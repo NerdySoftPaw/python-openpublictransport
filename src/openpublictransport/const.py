@@ -4,6 +4,7 @@
 PROVIDER_VRR = "vrr"
 PROVIDER_KVV = "kvv"
 PROVIDER_HVV = "hvv"
+PROVIDER_HVV_GTI = "hvv_gti"  # HVV via the official Geofox GTI API (credentials required)
 PROVIDER_BVG = "bvg"
 PROVIDER_MVV = "mvv"
 PROVIDER_VVS = "vvs"
