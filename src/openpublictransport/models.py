@@ -38,6 +38,9 @@ class UnifiedDeparture:
     notices: Optional[list[str]] = None
     planned_platform: Optional[str] = None
     platform_changed: bool = False
+    # Human-readable form of `platform` when the provider offers one
+    # ("Gleis 3" next to the technical "3")
+    platform_name: Optional[str] = None
     line_color: Optional[str] = None
     line_text_color: Optional[str] = None
 
@@ -60,6 +63,8 @@ class UnifiedDeparture:
             result["agency"] = self.agency
         if self.notices:
             result["notices"] = self.notices
+        if self.platform_name and self.platform_name != self.platform:
+            result["platform_name"] = self.platform_name
         if self.platform_changed:
             result["planned_platform"] = self.planned_platform
             result["platform_changed"] = True
