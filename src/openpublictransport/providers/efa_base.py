@@ -154,7 +154,9 @@ class EFABaseProvider(BaseProvider):
                 async with self.session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
                     if response.status == 200:
                         try:
-                            json_data = await response.json()
+                            # content_type=None: some deployments (VGN) send RapidJSON
+                            # payloads with a "text/xml;;charset=utf-8" header (issue #79).
+                            json_data = await response.json(content_type=None)
                             if not isinstance(json_data, dict):
                                 _LOGGER.warning("%s API returned non-dict response: %s", name, type(json_data))
                                 return None
@@ -251,7 +253,9 @@ class EFABaseProvider(BaseProvider):
             async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
                 if response.status == 200:
                     try:
-                        data = await response.json()
+                        # content_type=None: some deployments (VGN) send RapidJSON
+                        # payloads with a "text/xml;;charset=utf-8" header (issue #79).
+                        data = await response.json(content_type=None)
                     except (ValueError, aiohttp.ContentTypeError) as e:
                         _LOGGER.error("Invalid JSON response from %s API: %s", name, e)
                         return []
