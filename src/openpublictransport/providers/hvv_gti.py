@@ -19,10 +19,8 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Union
 from zoneinfo import ZoneInfo
 
-import aiohttp
-
 from ..const import PROVIDER_HVV_GTI
-from ..exceptions import AuthenticationError
+from ..exceptions import ApiResponseError, AuthenticationError
 from ..models import UnifiedDeparture
 from .base import BaseProvider
 
@@ -135,7 +133,9 @@ class HVVGTIProvider(BaseProvider):
         """
         if not self.api_key or not self.api_key_secondary:
             _LOGGER.error("%s: username and password are required", self.provider_name)
-            raise AuthenticationError(f"{self.provider_name}: username and password are required")
+            raise AuthenticationError(
+                self.provider_name, 401, f"{self.provider_name}: username and password are required"
+            )
 
         body = json.dumps(
             {"version": GTI_API_VERSION, "language": "de", **payload},
@@ -153,47 +153,31 @@ class HVVGTIProvider(BaseProvider):
         }
 
         url = f"{GTI_BASE_URL}/{method}"
-        try:
-            async with self.session.post(
-                url, data=body, headers=headers, timeout=aiohttp.ClientTimeout(total=15)
-            ) as response:
-                if response.status in (401, 403):
-                    raise AuthenticationError(
-                        f"{self.provider_name}: authentication failed (HTTP {response.status}) — "
-                        "check the GTI username and password"
-                    )
-                if response.status != 200:
-                    _LOGGER.warning("%s: %s → HTTP %s", self.provider_name, method, response.status)
-                    return None
-
-                data = await response.json(content_type=None)
-        except AuthenticationError:
-            raise
-        except aiohttp.ClientError as exc:
-            _LOGGER.warning("%s: %s request failed: %s", self.provider_name, method, exc)
-            return None
-        except Exception as exc:
-            _LOGGER.warning("%s: %s error: %s", self.provider_name, method, exc)
-            return None
+        data = await self._request("post", url, data=body, headers=headers, timeout=15)
 
         if not isinstance(data, dict):
-            _LOGGER.warning("%s: %s returned %s, expected an object", self.provider_name, method, type(data))
-            return None
+            raise ApiResponseError(
+                f"{self.provider_name}: {method} returned {type(data).__name__}, expected an object"
+            )
 
         return_code = data.get("returnCode")
         if return_code != "OK":
             # GTI signals a bad key with a return code rather than an HTTP status.
             if return_code in ("ERROR_COMM", "ERROR_TEXT") and "auth" in str(data.get("errorDevInfo", "")).lower():
-                raise AuthenticationError(f"{self.provider_name}: {data.get('errorText') or return_code}")
-            _LOGGER.warning(
-                "%s: %s returned %s — %s (%s)",
-                self.provider_name,
-                method,
-                return_code,
-                data.get("errorText") or "no message",
-                data.get("errorDevInfo") or "",
+                raise AuthenticationError(
+                    self.provider_name, 401, f"{self.provider_name}: {data.get('errorText') or return_code}"
+                )
+            if return_code == "ERROR_TEXT":
+                # GTI reports an unmatched search term this way — that is an
+                # empty result, not a failure.
+                _LOGGER.debug(
+                    "%s: %s found nothing — %s", self.provider_name, method, data.get("errorText") or "no message"
+                )
+                return None
+            raise ApiResponseError(
+                f"{self.provider_name}: {method} returned {return_code} — "
+                f"{data.get('errorText') or 'no message'} ({data.get('errorDevInfo') or ''})"
             )
-            return None
 
         return data
 

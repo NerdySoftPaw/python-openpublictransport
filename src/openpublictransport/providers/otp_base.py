@@ -3,14 +3,11 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
-
-from ..exceptions import AuthenticationError
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
-import aiohttp
-
+from ..exceptions import OpenPublicTransportError
 from ..models import UnifiedDeparture
 from .base import BaseProvider
 
@@ -77,51 +74,46 @@ class OTPBaseProvider(BaseProvider):
         url: str,
         params: Optional[Dict] = None,
     ) -> Optional[Any]:
-        try:
-            async with self.session.get(
-                url,
-                params=params or {},
-                headers=self._auth_headers(),
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                if resp.status == 200:
-                    return await resp.json()
-                if resp.status == 204:
-                    return None
-                if resp.status in (401, 403):
-                    raise AuthenticationError(
-                        f"{self.provider_name}: authentication failed (HTTP {resp.status}) — check API key"
-                    )
-                _LOGGER.warning("%s OTP %s → HTTP %s", self.provider_name, url, resp.status)
-        except aiohttp.ClientError as exc:
-            _LOGGER.warning("%s OTP request failed: %s", self.provider_name, exc)
-        except Exception as exc:
-            _LOGGER.warning("%s OTP error: %s", self.provider_name, exc)
-        return None
+        return await self._request(
+            "get",
+            url,
+            params=params or {},
+            headers=self._auth_headers(),
+            timeout=15,
+        )
 
     async def _geocode(self, search_term: str) -> Optional[Tuple[float, float]]:
         """Resolve a stop name to (lat, lon) via Nominatim / OpenStreetMap."""
+        last_error: Optional[OpenPublicTransportError] = None
+
         for i, candidate in enumerate(_nominatim_candidates(search_term)):
             if i > 0:
                 await asyncio.sleep(0.3)
             try:
-                async with self.session.get(
+                results = await self._request(
+                    "get",
                     _NOMINATIM_URL,
                     params={"q": candidate, "format": "json", "limit": 1, "countrycodes": "de"},
                     headers={"User-Agent": _NOMINATIM_UA, "Accept": "application/json"},
-                    timeout=aiohttp.ClientTimeout(total=10),
-                ) as resp:
-                    if resp.status == 200:
-                        results = await resp.json(content_type=None)
-                        if results:
-                            if i > 0:
-                                _LOGGER.debug(
-                                    "%s: Nominatim hit on simplified query '%s'", self.provider_name, candidate
-                                )
-                            return float(results[0]["lat"]), float(results[0]["lon"])
-            except Exception as exc:
+                    timeout=10,
+                )
+            except OpenPublicTransportError as exc:
+                # Remember it: if no candidate ever gets an answer, the geocoder
+                # is down and that must surface as an error, not as "no results".
+                last_error = exc
                 _LOGGER.debug("%s: Nominatim geocode error: %s", self.provider_name, exc)
-        _LOGGER.warning("%s: Nominatim found nothing for '%s'", self.provider_name, search_term)
+                continue
+
+            if results:
+                if i > 0:
+                    _LOGGER.debug("%s: Nominatim hit on simplified query '%s'", self.provider_name, candidate)
+                return float(results[0]["lat"]), float(results[0]["lon"])
+            last_error = None
+
+        if last_error is not None:
+            raise last_error
+
+        _LOGGER.debug("%s: Nominatim found nothing for '%s'", self.provider_name, search_term)
         return None
 
     async def search_stops(self, search_term: str) -> List[Dict[str, Any]]:

@@ -16,8 +16,6 @@ from typing import Any, Dict, List, Optional, Union
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
-import aiohttp
-
 from ..const import PROVIDER_ENTUR_NO
 from ..models import UnifiedDeparture
 from .base import BaseProvider
@@ -84,18 +82,7 @@ class EnturProvider(BaseProvider):
             f"{GEOCODER_URL}?text={quote(search_term, safe='')}"
             "&size=12&lang=en&layers=venue"
         )
-        try:
-            async with self.session.get(
-                url, headers=self._headers(), timeout=aiohttp.ClientTimeout(total=10)
-            ) as response:
-                if response.status != 200:
-                    _LOGGER.error("Entur geocoder returned status %s", response.status)
-                    return []
-                data = await response.json()
-        except Exception as e:  # noqa: BLE001
-            _LOGGER.error("Error searching Entur stops: %s", e)
-            return []
-
+        data = await self._request("get", url, headers=self._headers(), timeout=10)
         return self._stops_from_geocoder(data)
 
     @staticmethod
@@ -135,23 +122,13 @@ class EnturProvider(BaseProvider):
             "query": _DEPARTURES_QUERY,
             "variables": {"id": station_id, "n": departures_limit},
         }
-        try:
-            async with self.session.post(
-                JOURNEY_PLANNER_URL,
-                json=payload,
-                headers=self._headers(),
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as response:
-                if response.status != 200:
-                    _LOGGER.warning("Entur journey planner returned status %s", response.status)
-                    return None
-                data = await response.json()
-        except aiohttp.ClientError as e:
-            _LOGGER.warning("Entur journey planner request failed: %s", e)
-            return None
-        except Exception as e:  # noqa: BLE001
-            _LOGGER.warning("Entur journey planner error: %s", e)
-            return None
+        data = await self._request(
+            "post",
+            JOURNEY_PLANNER_URL,
+            json=payload,
+            headers=self._headers(),
+            timeout=15,
+        )
 
         stop_place = (data.get("data") or {}).get("stopPlace")
         if not stop_place:

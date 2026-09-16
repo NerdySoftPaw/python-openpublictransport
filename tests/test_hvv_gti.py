@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from openpublictransport.exceptions import AuthenticationError
+from openpublictransport.exceptions import ApiError, AuthenticationError
 from openpublictransport.providers import get_provider
 from openpublictransport.providers.hvv_gti import HVVGTIProvider, sign_request
 
@@ -181,10 +181,14 @@ async def test_non_ok_return_code_is_not_fatal():
     assert await _provider(session).search_stops("Nirgendwo") == []
 
 
-async def test_http_error_returns_no_departures():
+async def test_http_error_raises_api_error():
+    """A server-side failure must be distinguishable from "no departures"."""
     provider = _provider(_FakeSession(status=500))
 
-    assert await provider.fetch_departures("Master:84902", "", "", 10) is None
+    with pytest.raises(ApiError) as excinfo:
+        await provider.fetch_departures("Master:84902", "", "", 10)
+
+    assert excinfo.value.status == 500
 
 
 # ── stop search ───────────────────────────────────────────────────────────────

@@ -1,18 +1,13 @@
 """Trafiklab (Sweden) provider implementation."""
 
-import asyncio
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
-from ..exceptions import AuthenticationError
-
-import aiohttp
-from aiohttp import ClientConnectorError
-
 from ..const import API_BASE_URL_TRAFIKLAB, PROVIDER_TRAFIKLAB_SE, TRAFIKLAB_TRANSPORTATION_TYPES
+from ..exceptions import ApiResponseError, AuthenticationError
 from ..models import UnifiedDeparture
 from ..parsers import parse_departure_generic
 from .base import BaseProvider
@@ -46,8 +41,7 @@ class TrafiklabProvider(BaseProvider):
         departures_limit: int,
     ) -> Optional[Dict[str, Any]]:
         if not self.api_key:
-            _LOGGER.error("Trafiklab API key is required")
-            return None
+            raise AuthenticationError("Trafiklab", 401, "Trafiklab: an API key is required")
 
         if not station_id:
             _LOGGER.error("Trafiklab requires a station ID")
@@ -58,121 +52,66 @@ class TrafiklabProvider(BaseProvider):
 
         headers = {"User-Agent": "Mozilla/5.0 (compatible; OpenPublicTransport Trafiklab)"}
 
-        max_retries = 3
-        for attempt in range(1, max_retries + 1):
-            try:
-                async with self.session.get(
-                    url, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=10)
-                ) as response:
-                    if response.status == 200:
-                        try:
-                            json_data = await response.json()
-                            if not isinstance(json_data, dict):
-                                _LOGGER.warning("Trafiklab API returned non-dict response: %s", type(json_data))
-                                return None
+        json_data = await self._request(
+            "get", url, params=params, headers=headers, timeout=10, retries=3
+        )
 
-                            if "departures" not in json_data:
-                                _LOGGER.debug("Trafiklab API response missing 'departures' field")
-                                return {"stopEvents": []}
+        if not isinstance(json_data, dict):
+            raise ApiResponseError(f"Trafiklab: API returned {type(json_data).__name__} instead of an object")
 
-                            departures = json_data.get("departures", [])
-                            _LOGGER.debug("Trafiklab API returned %d departures", len(departures))
-                            stop_events = []
+        if "departures" not in json_data:
+            _LOGGER.debug("Trafiklab API response missing 'departures' field")
+            return {"stopEvents": []}
 
-                            stockholm_tz = ZoneInfo("Europe/Stockholm")
-                            now_stockholm = datetime.now(stockholm_tz)
-                            offset = now_stockholm.strftime("%z")
-                            offset_formatted = f"{offset[:3]}:{offset[3:]}"  # +0100 -> +01:00
+        departures = json_data.get("departures", [])
+        _LOGGER.debug("Trafiklab API returned %d departures", len(departures))
+        stop_events = []
 
-                            for dep in departures:
-                                if not isinstance(dep, dict):
-                                    continue
+        stockholm_tz = ZoneInfo("Europe/Stockholm")
+        now_stockholm = datetime.now(stockholm_tz)
+        offset = now_stockholm.strftime("%z")
+        offset_formatted = f"{offset[:3]}:{offset[3:]}"  # +0100 -> +01:00
 
-                                scheduled_time = dep.get("scheduled")
-                                realtime_time = dep.get("realtime")
-                                route = dep.get("route") or {}
-                                platform_data = dep.get("scheduled_platform") or dep.get("realtime_platform") or {}
-                                transport_mode = route.get("transport_mode", "BUS") if route else "BUS"
+        for dep in departures:
+            if not isinstance(dep, dict):
+                continue
 
-                                destination_obj = route.get("destination") if route else None
-                                destination_name = (
-                                    destination_obj.get("name", "Unknown")
-                                    if isinstance(destination_obj, dict)
-                                    else "Unknown"
-                                )
+            scheduled_time = dep.get("scheduled")
+            realtime_time = dep.get("realtime")
+            route = dep.get("route") or {}
+            platform_data = dep.get("scheduled_platform") or dep.get("realtime_platform") or {}
+            transport_mode = route.get("transport_mode", "BUS") if route else "BUS"
 
-                                if scheduled_time and "+" not in scheduled_time and "Z" not in scheduled_time:
-                                    scheduled_time = f"{scheduled_time}{offset_formatted}"
-                                if realtime_time and "+" not in realtime_time and "Z" not in realtime_time:
-                                    realtime_time = f"{realtime_time}{offset_formatted}"
+            destination_obj = route.get("destination") if route else None
+            destination_name = (
+                destination_obj.get("name", "Unknown")
+                if isinstance(destination_obj, dict)
+                else "Unknown"
+            )
 
-                                stop_event = {
-                                    "departureTimePlanned": scheduled_time,
-                                    "departureTimeEstimated": realtime_time or scheduled_time,
-                                    "transportation": {
-                                        "number": route.get("designation", "") if route else "",
-                                        "description": (
-                                            (route.get("name") or route.get("direction", "")) if route else ""
-                                        ),
-                                        "destination": {"name": destination_name},
-                                        "product": {"class": 0},
-                                    },
-                                    "platform": {"name": platform_data.get("designation", "") if platform_data else ""},
-                                    "realtimeStatus": ["MONITORED"] if dep.get("is_realtime") else [],
-                                    "transportMode": transport_mode,
-                                }
-                                stop_events.append(stop_event)
+            if scheduled_time and "+" not in scheduled_time and "Z" not in scheduled_time:
+                scheduled_time = f"{scheduled_time}{offset_formatted}"
+            if realtime_time and "+" not in realtime_time and "Z" not in realtime_time:
+                realtime_time = f"{realtime_time}{offset_formatted}"
 
-                            return {"stopEvents": stop_events}
-                        except (ValueError, aiohttp.ContentTypeError) as e:
-                            _LOGGER.warning("Trafiklab API returned invalid JSON: %s", e)
-                            return None
-                        except Exception as e:
-                            _LOGGER.warning("Trafiklab API JSON parsing failed: %s", e)
-                            return None
-                    elif response.status == 404:
-                        _LOGGER.warning("Trafiklab API endpoint not found (404)")
-                        return None
-                    elif response.status in (401, 403):
-                        raise AuthenticationError(
-                            f"Trafiklab: authentication failed (HTTP {response.status}) — check API key"
-                        )
-                    elif response.status >= 500:
-                        _LOGGER.warning(
-                            "Trafiklab API server error (status %s) on attempt %d/%d",
-                            response.status,
-                            attempt,
-                            max_retries,
-                        )
-                        if attempt < max_retries:
-                            await asyncio.sleep(2**attempt)
-                            continue
-                        return None
-                    else:
-                        _LOGGER.warning(
-                            "Trafiklab API returned status %s on attempt %d/%d", response.status, attempt, max_retries
-                        )
-                        if attempt < max_retries:
-                            await asyncio.sleep(2**attempt)
-                            continue
+            stop_event = {
+                "departureTimePlanned": scheduled_time,
+                "departureTimeEstimated": realtime_time or scheduled_time,
+                "transportation": {
+                    "number": route.get("designation", "") if route else "",
+                    "description": (
+                        (route.get("name") or route.get("direction", "")) if route else ""
+                    ),
+                    "destination": {"name": destination_name},
+                    "product": {"class": 0},
+                },
+                "platform": {"name": platform_data.get("designation", "") if platform_data else ""},
+                "realtimeStatus": ["MONITORED"] if dep.get("is_realtime") else [],
+                "transportMode": transport_mode,
+            }
+            stop_events.append(stop_event)
 
-            except asyncio.TimeoutError:
-                _LOGGER.warning("Trafiklab API timeout on attempt %d/%d", attempt, max_retries)
-                if attempt < max_retries:
-                    await asyncio.sleep(2**attempt)
-                    continue
-            except ClientConnectorError as e:
-                _LOGGER.warning("Trafiklab API connection error on attempt %d/%d: %s", attempt, max_retries, e)
-                if attempt < max_retries:
-                    await asyncio.sleep(2**attempt)
-                    continue
-            except Exception as e:
-                _LOGGER.warning("Attempt %d/%d failed: %s", attempt, max_retries, e)
-                if attempt < max_retries:
-                    await asyncio.sleep(2**attempt)
-                    continue
-
-        return None
+        return {"stopEvents": stop_events}
 
     def parse_departure(
         self, stop: Dict[str, Any], tz: Union[ZoneInfo, Any], now: datetime
@@ -195,90 +134,37 @@ class TrafiklabProvider(BaseProvider):
 
     async def search_stops(self, search_term: str) -> List[Dict[str, Any]]:
         if not self.api_key:
-            _LOGGER.error("Trafiklab API key is required for stop search")
-            return []
+            raise AuthenticationError("Trafiklab", 401, "Trafiklab: an API key is required")
 
         encoded_search = quote(search_term, safe="")
         url = f"{API_BASE_URL_TRAFIKLAB}/stops/name/{encoded_search}"
         params = {"key": self.api_key}
 
-        max_retries = 3
-        for attempt in range(1, max_retries + 1):
-            try:
-                async with self.session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                    if response.status == 200:
-                        try:
-                            data = await response.json()
-                        except (ValueError, aiohttp.ContentTypeError) as e:
-                            _LOGGER.error("Invalid JSON response from Trafiklab API: %s", e)
-                            if attempt < max_retries:
-                                await asyncio.sleep(2**attempt)
-                                continue
-                            return []
+        data = await self._request("get", url, params=params, timeout=10, retries=3)
 
-                        if not isinstance(data, dict):
-                            _LOGGER.error("Trafiklab API returned non-dict response: %s", type(data))
-                            if attempt < max_retries:
-                                await asyncio.sleep(2**attempt)
-                                continue
-                            return []
+        if not isinstance(data, dict):
+            raise ApiResponseError(f"Trafiklab: API returned {type(data).__name__} instead of an object")
 
-                        stop_groups = data.get("stop_groups", [])
-                        results = []
+        stop_groups = data.get("stop_groups", [])
+        results = []
 
-                        for stop_group in stop_groups:
-                            if not isinstance(stop_group, dict):
-                                continue
+        for stop_group in stop_groups:
+            if not isinstance(stop_group, dict):
+                continue
 
-                            stops = stop_group.get("stops", [])
-                            place = None
-                            if stops and isinstance(stops[0], dict):
-                                stop_name = stop_group.get("name", "")
-                                place = stop_name.split(",")[-1].strip() if "," in stop_name else None
+            stops = stop_group.get("stops", [])
+            place = None
+            if stops and isinstance(stops[0], dict):
+                stop_name = stop_group.get("name", "")
+                place = stop_name.split(",")[-1].strip() if "," in stop_name else None
 
-                            result = {
-                                "id": stop_group.get("id", ""),
-                                "name": stop_group.get("name", ""),
-                                "place": place or "",
-                                "area_type": stop_group.get("area_type", ""),
-                                "transport_modes": stop_group.get("transport_modes", []),
-                            }
-                            results.append(result)
+            result = {
+                "id": stop_group.get("id", ""),
+                "name": stop_group.get("name", ""),
+                "place": place or "",
+                "area_type": stop_group.get("area_type", ""),
+                "transport_modes": stop_group.get("transport_modes", []),
+            }
+            results.append(result)
 
-                        return results
-                    elif response.status in (401, 403):
-                        raise AuthenticationError(
-                            f"Trafiklab: authentication failed (HTTP {response.status}) — check API key"
-                        )
-                    elif response.status == 404:
-                        _LOGGER.warning("Trafiklab API endpoint not found (404)")
-                        return []
-                    elif response.status >= 500:
-                        _LOGGER.warning(
-                            "Trafiklab API server error (status %s) on attempt %d/%d",
-                            response.status,
-                            attempt,
-                            max_retries,
-                        )
-                        if attempt < max_retries:
-                            await asyncio.sleep(2**attempt)
-                            continue
-                    else:
-                        _LOGGER.warning(
-                            "Trafiklab API returned status %s on attempt %d/%d", response.status, attempt, max_retries
-                        )
-                        if attempt < max_retries:
-                            await asyncio.sleep(2**attempt)
-                            continue
-            except asyncio.TimeoutError:
-                _LOGGER.error("Trafiklab API request timeout")
-                if attempt < max_retries:
-                    await asyncio.sleep(2**attempt)
-                    continue
-            except Exception as e:
-                _LOGGER.error("Error searching stops: %s", e, exc_info=True)
-                if attempt < max_retries:
-                    await asyncio.sleep(2**attempt)
-                    continue
-
-        return []
+        return results

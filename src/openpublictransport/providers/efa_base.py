@@ -1,6 +1,5 @@
 """Base class for EFA (Electronic Fahrplan-Auskunft) providers."""
 
-import asyncio
 import logging
 from abc import abstractmethod
 from datetime import datetime
@@ -8,8 +7,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
-import aiohttp
-
+from ..exceptions import ApiResponseError
 from ..models import UnifiedDeparture
 from ..parsers import parse_departure_generic
 from .base import BaseProvider
@@ -148,47 +146,18 @@ class EFABaseProvider(BaseProvider):
 
         headers = {"User-Agent": f"Mozilla/5.0 (compatible; OpenPublicTransport {self.provider_id.upper()})"}
 
-        max_retries = 3
-        for attempt in range(1, max_retries + 1):
-            try:
-                async with self.session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                    if response.status == 200:
-                        try:
-                            # content_type=None: some deployments (VGN) send RapidJSON
-                            # payloads with a "text/xml;;charset=utf-8" header (issue #79).
-                            json_data = await response.json(content_type=None)
-                            if not isinstance(json_data, dict):
-                                _LOGGER.warning("%s API returned non-dict response: %s", name, type(json_data))
-                                return None
+        # content_type=None: some deployments (VGN) send RapidJSON payloads with
+        # a "text/xml;;charset=utf-8" header (issue #79).
+        json_data = await self._request("get", url, headers=headers, retries=3, timeout=10)
 
-                            if "stopEvents" not in json_data:
-                                _LOGGER.debug("%s API response missing 'stopEvents' field", name)
-                                return {"stopEvents": []}
+        if not isinstance(json_data, dict):
+            raise ApiResponseError(f"{name}: API returned {type(json_data).__name__} instead of an object")
 
-                            return json_data
-                        except (ValueError, aiohttp.ContentTypeError) as e:
-                            _LOGGER.warning("%s API returned invalid JSON: %s", name, e)
-                            return None
-                        except Exception as e:
-                            _LOGGER.warning("%s API JSON parsing failed: %s", name, e)
-                            return None
-                    elif response.status == 404:
-                        _LOGGER.warning("%s API endpoint not found (404)", name)
-                        return None
-                    elif response.status >= 500:
-                        _LOGGER.warning("%s API server error (status %s)", name, response.status)
-                    else:
-                        _LOGGER.warning("%s API returned status %s", name, response.status)
+        if "stopEvents" not in json_data:
+            _LOGGER.debug("%s API response missing 'stopEvents' field", name)
+            return {"stopEvents": []}
 
-            except asyncio.TimeoutError:
-                _LOGGER.warning("%s API timeout on attempt %s", name, attempt)
-            except Exception as e:
-                _LOGGER.warning("%s attempt %s failed: %s", name, attempt, e)
-
-            if attempt < max_retries:
-                await asyncio.sleep(2**attempt)
-
-        return None
+        return json_data
 
     def parse_departure(
         self, stop: Dict[str, Any], tz: Union[ZoneInfo, Any], now: datetime
@@ -249,47 +218,31 @@ class EFABaseProvider(BaseProvider):
         url = f"{self.sf_base_url}?{params}"
         name = self.provider_name
 
-        try:
-            async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                if response.status == 200:
-                    try:
-                        # content_type=None: some deployments (VGN) send RapidJSON
-                        # payloads with a "text/xml;;charset=utf-8" header (issue #79).
-                        data = await response.json(content_type=None)
-                    except (ValueError, aiohttp.ContentTypeError) as e:
-                        _LOGGER.error("Invalid JSON response from %s API: %s", name, e)
-                        return []
+        # content_type=None: some deployments (VGN) send RapidJSON payloads with
+        # a "text/xml;;charset=utf-8" header (issue #79).
+        data = await self._request("get", url, timeout=10)
 
-                    if not isinstance(data, dict):
-                        _LOGGER.error("%s API returned non-dict response: %s", name, type(data))
-                        return []
+        if not isinstance(data, dict):
+            raise ApiResponseError(f"{name}: API returned {type(data).__name__} instead of an object")
 
-                    locations = data.get("locations", [])
-                    results = []
+        results = []
+        for location in data.get("locations", []):
+            if not isinstance(location, dict):
+                continue
 
-                    for location in locations:
-                        if not isinstance(location, dict):
-                            continue
+            disassembled_name = location.get("disassembledName", "")
+            place = ""
+            if "," in disassembled_name:
+                parts = disassembled_name.rsplit(",", 1)
+                place = parts[-1].strip() if len(parts) > 1 else ""
 
-                        disassembled_name = location.get("disassembledName", "")
-                        place = ""
-                        if "," in disassembled_name:
-                            parts = disassembled_name.rsplit(",", 1)
-                            place = parts[-1].strip() if len(parts) > 1 else ""
+            results.append(
+                {
+                    "id": location.get("id", ""),
+                    "name": location.get("name", ""),
+                    "place": place,
+                    "area_type": location.get("type", ""),
+                }
+            )
 
-                        results.append(
-                            {
-                                "id": location.get("id", ""),
-                                "name": location.get("name", ""),
-                                "place": place,
-                                "area_type": location.get("type", ""),
-                            }
-                        )
-
-                    return results
-                else:
-                    _LOGGER.error("%s API returned status %s", name, response.status)
-        except Exception as e:
-            _LOGGER.error("Error searching %s stops: %s", name, e, exc_info=True)
-
-        return []
+        return results

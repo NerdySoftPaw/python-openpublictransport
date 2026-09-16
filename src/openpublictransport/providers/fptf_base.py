@@ -6,8 +6,7 @@ from typing import Any, Dict, List, Optional, Union
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
-import aiohttp
-
+from ..exceptions import ApiResponseError
 from ..models import UnifiedDeparture
 from .base import BaseProvider
 
@@ -45,22 +44,13 @@ class FPTFBaseProvider(BaseProvider):
 
         url = f"{self.API_BASE}/stops/{station_id}/departures?results={departures_limit}&duration=120"
 
-        try:
-            async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if not isinstance(data, dict) or "departures" not in data:
-                        _LOGGER.warning("%s API unexpected response format", self.provider_name)
-                        return {"stopEvents": []}
-                    return {"stopEvents": data["departures"]}
-                else:
-                    _LOGGER.warning("%s API returned status %s", self.provider_name, response.status)
-        except aiohttp.ClientError as e:
-            _LOGGER.warning("%s API request failed: %s", self.provider_name, e)
-        except Exception as e:
-            _LOGGER.warning("%s API error: %s", self.provider_name, e)
+        data = await self._request("get", url, timeout=15)
 
-        return None
+        if not isinstance(data, dict) or "departures" not in data:
+            _LOGGER.debug("%s API response missing 'departures' field", self.provider_name)
+            return {"stopEvents": []}
+
+        return {"stopEvents": data["departures"]}
 
     def parse_departure(
         self, stop: Dict[str, Any], tz: Union[ZoneInfo, Any], now: datetime
@@ -133,37 +123,29 @@ class FPTFBaseProvider(BaseProvider):
     async def search_stops(self, search_term: str) -> List[Dict[str, Any]]:
         url = f"{self.API_BASE}/locations?query={quote(search_term, safe='')}&results=15"
 
-        try:
-            async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if not isinstance(data, list):
-                        return []
+        data = await self._request("get", url, timeout=10)
 
-                    results = []
-                    for location in data:
-                        if not isinstance(location, dict):
-                            continue
-                        if location.get("type") not in ("stop", "station"):
-                            continue
+        if not isinstance(data, list):
+            raise ApiResponseError(f"{self.provider_name}: API returned {type(data).__name__} instead of a list")
 
-                        name = location.get("name", "")
-                        place = ""
-                        if "(" in name and name.endswith(")"):
-                            place = name[name.rfind("(") + 1 : -1]
+        results = []
+        for location in data:
+            if not isinstance(location, dict):
+                continue
+            if location.get("type") not in ("stop", "station"):
+                continue
 
-                        results.append(
-                            {
-                                "id": location.get("id", ""),
-                                "name": name,
-                                "place": place,
-                                "area_type": "stop",
-                            }
-                        )
-                    return results
-                else:
-                    _LOGGER.error("%s API returned status %s", self.provider_name, response.status)
-        except Exception as e:
-            _LOGGER.error("Error searching %s stops: %s", self.provider_name, e)
+            name = location.get("name", "")
+            place = ""
+            if "(" in name and name.endswith(")"):
+                place = name[name.rfind("(") + 1 : -1]
 
-        return []
+            results.append(
+                {
+                    "id": location.get("id", ""),
+                    "name": name,
+                    "place": place,
+                    "area_type": "stop",
+                }
+            )
+        return results

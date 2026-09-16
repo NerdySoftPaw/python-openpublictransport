@@ -3,13 +3,10 @@
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
-
-from ..exceptions import AuthenticationError
 from xml.etree import ElementTree as ET
 from zoneinfo import ZoneInfo
 
-import aiohttp
-
+from ..exceptions import ApiResponseError
 from ..models import UnifiedDeparture
 from .base import BaseProvider
 
@@ -132,30 +129,19 @@ class TRIASBaseProvider(BaseProvider):
     async def _post_trias(self, xml_body: str) -> Optional[ET.Element]:
         headers = {"Content-Type": "text/xml; charset=utf-8", **self._extra_headers()}
 
-        try:
-            async with self.session.post(
-                self.trias_base_url,
-                data=xml_body.encode("utf-8"),
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as response:
-                if response.status == 200:
-                    text = await response.text()
-                    return ET.fromstring(text)
-                elif response.status in (401, 403):
-                    raise AuthenticationError(
-                        f"{self.provider_name}: authentication failed (HTTP {response.status}) — check API key"
-                    )
-                else:
-                    _LOGGER.warning("%s TRIAS API returned status %s", self.provider_name, response.status)
-        except aiohttp.ClientError as e:
-            _LOGGER.warning("%s TRIAS API request failed: %s", self.provider_name, e)
-        except ET.ParseError as e:
-            _LOGGER.warning("%s TRIAS XML parse error: %s", self.provider_name, e)
-        except Exception as e:
-            _LOGGER.warning("%s TRIAS error: %s", self.provider_name, e)
+        text = await self._request(
+            "post",
+            self.trias_base_url,
+            data=xml_body.encode("utf-8"),
+            headers=headers,
+            timeout=15,
+            response_format="text",
+        )
 
-        return None
+        try:
+            return ET.fromstring(text)
+        except ET.ParseError as e:
+            raise ApiResponseError(f"{self.provider_name}: TRIAS XML parse error ({e})") from e
 
     async def fetch_departures(
         self,
