@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 import aiohttp
 
 from ..const import PROVIDER_REJSEPLANEN
-from ..exceptions import AuthenticationError
+from ..exceptions import ApiResponseError, AuthenticationError
 from ..models import UnifiedDeparture
 from .base import BaseProvider
 
@@ -123,8 +123,7 @@ class RejseplanenProvider(BaseProvider):
             _LOGGER.warning("%s: station_id required", self.provider_name)
             return None
         if not self.api_key:
-            _LOGGER.error("%s: API key required", self.provider_name)
-            return None
+            raise AuthenticationError(self.provider_name, 401, f"{self.provider_name}: an API key is required")
 
         url = (
             f"{_API_BASE}/departureBoard"
@@ -134,25 +133,14 @@ class RejseplanenProvider(BaseProvider):
             f"&duration=120"
             f"&maxJourneys={departures_limit}"
         )
-        try:
-            async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                if resp.status in (401, 403):
-                    raise AuthenticationError(
-                        f"{self.provider_name}: authentication failed (HTTP {resp.status}) — check API key"
-                    )
-                if resp.status != 200:
-                    _LOGGER.warning("%s: HTTP %s for station %s", self.provider_name, resp.status, station_id)
-                    return None
-                data = await resp.json(content_type=None)
-        except Exception as exc:
-            _LOGGER.warning("%s: request failed: %s", self.provider_name, exc)
-            return None
+        data = await self._request("get", url, timeout=15)
 
         if not isinstance(data, dict):
-            return None
+            raise ApiResponseError(f"{self.provider_name}: API returned {type(data).__name__} instead of an object")
         if "errorCode" in data:
-            _LOGGER.warning("%s: API error %s: %s", self.provider_name, data.get("errorCode"), data.get("errorText"))
-            return None
+            raise ApiResponseError(
+                f"{self.provider_name}: API error {data.get('errorCode')}: {data.get('errorText')}"
+            )
 
         # www.rejseplanen.dk returns "Departure" at the top level; older HAFAS
         # deployments nested it under "DepartureBoard". Support both.
@@ -233,8 +221,7 @@ class RejseplanenProvider(BaseProvider):
     async def search_stops(self, search_term: str) -> List[Dict[str, Any]]:
         """Search for Danish stops using the Rejseplanen location.name endpoint."""
         if not self.api_key:
-            _LOGGER.error("%s: API key required for stop search", self.provider_name)
-            return []
+            raise AuthenticationError(self.provider_name, 401, f"{self.provider_name}: an API key is required")
 
         url = (
             f"{_API_BASE}/location.name"
@@ -244,18 +231,10 @@ class RejseplanenProvider(BaseProvider):
             f"&maxNo=15"
             f"&type=S"
         )
-        try:
-            async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                if resp.status != 200:
-                    _LOGGER.warning("%s: stop search HTTP %s", self.provider_name, resp.status)
-                    return []
-                data = await resp.json(content_type=None)
-        except Exception as exc:
-            _LOGGER.warning("%s: stop search failed: %s", self.provider_name, exc)
-            return []
+        data = await self._request("get", url, timeout=10)
 
         if not isinstance(data, dict):
-            return []
+            raise ApiResponseError(f"{self.provider_name}: API returned {type(data).__name__} instead of an object")
 
         # www.rejseplanen.dk returns "stopLocationOrCoordLocation" (a list whose
         # entries wrap a StopLocation or CoordLocation); older HAFAS deployments

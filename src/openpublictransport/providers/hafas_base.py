@@ -31,8 +31,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
-import aiohttp
-
 from ..models import UnifiedDeparture
 from .base import BaseProvider
 
@@ -159,17 +157,7 @@ class HafasBaseProvider(BaseProvider):
             f"{self.hafas_base_url}/{self.stopfinder_path}"
             f"?REQ0JourneyStopsS0A=1&REQ0JourneyStopsS0G={quote(search_term, safe='')}&js=true"
         )
-        try:
-            async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                if response.status != 200:
-                    _LOGGER.error(
-                        "%s stop finder returned status %s", self.provider_name, response.status
-                    )
-                    return []
-                text = await response.text()
-        except Exception as e:  # noqa: BLE001 — network errors must not crash the search
-            _LOGGER.error("Error searching %s stops: %s", self.provider_name, e)
-            return []
+        text = await self._request("get", url, timeout=10, response_format="text")
         return self._parse_stopfinder(text)
 
     @staticmethod
@@ -228,21 +216,7 @@ class HafasBaseProvider(BaseProvider):
             params.append(("productsFilter", self.products_filter))
         url = f"{self.hafas_base_url}/{self.board_path}?{urlencode(params)}"
 
-        try:
-            async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as response:
-                if response.status != 200:
-                    _LOGGER.warning(
-                        "%s station board returned status %s", self.provider_name, response.status
-                    )
-                    return None
-                raw = await response.read()
-        except aiohttp.ClientError as e:
-            _LOGGER.warning("%s station board request failed: %s", self.provider_name, e)
-            return None
-        except Exception as e:  # noqa: BLE001
-            _LOGGER.warning("%s station board error: %s", self.provider_name, e)
-            return None
-
+        raw = await self._request("get", url, timeout=15, response_format="bytes")
         return {"stopEvents": self._parse_board(raw)}
 
     def _parse_board(self, raw: bytes) -> List[Dict[str, Any]]:

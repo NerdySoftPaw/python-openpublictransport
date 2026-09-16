@@ -6,9 +6,8 @@ from typing import Any, Dict, List, Optional, Union
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
-import aiohttp
-
 from ..const import PROVIDER_SBB
+from ..exceptions import ApiResponseError
 from ..models import UnifiedDeparture
 from .base import BaseProvider
 
@@ -70,22 +69,12 @@ class SBBProvider(BaseProvider):
             station_name = f"{name_dm}, {place_dm}" if place_dm else name_dm
             url = f"{API_BASE}/stationboard?station={quote(station_name, safe='')}&limit={departures_limit}"
 
-        try:
-            async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if not isinstance(data, dict):
-                        return None
-                    stationboard = data.get("stationboard", [])
-                    return {"stopEvents": stationboard}
-                else:
-                    _LOGGER.warning("SBB API returned status %s", response.status)
-        except aiohttp.ClientError as e:
-            _LOGGER.warning("SBB API request failed: %s", e)
-        except Exception as e:
-            _LOGGER.warning("SBB API error: %s", e)
+        data = await self._request("get", url, timeout=15)
 
-        return None
+        if not isinstance(data, dict):
+            raise ApiResponseError(f"SBB: API returned {type(data).__name__} instead of an object")
+
+        return {"stopEvents": data.get("stationboard", [])}
 
     def parse_departure(
         self, stop: Dict[str, Any], tz: Union[ZoneInfo, Any], now: datetime
@@ -147,28 +136,21 @@ class SBBProvider(BaseProvider):
     async def search_stops(self, search_term: str) -> List[Dict[str, Any]]:
         url = f"{API_BASE}/locations?query={quote(search_term, safe='')}&type=station"
 
-        try:
-            async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    stations = data.get("stations", [])
-                    results = []
-                    for station in stations:
-                        if not isinstance(station, dict) or not station.get("id"):
-                            continue
-                        name = station.get("name", "")
-                        results.append(
-                            {
-                                "id": str(station.get("id", "")),
-                                "name": name,
-                                "place": "",
-                                "area_type": "stop",
-                            }
-                        )
-                    return results
-                else:
-                    _LOGGER.error("SBB API returned status %s", response.status)
-        except Exception as e:
-            _LOGGER.error("Error searching SBB stops: %s", e)
+        data = await self._request("get", url, timeout=10)
 
-        return []
+        if not isinstance(data, dict):
+            raise ApiResponseError(f"SBB: API returned {type(data).__name__} instead of an object")
+
+        results = []
+        for station in data.get("stations", []):
+            if not isinstance(station, dict) or not station.get("id"):
+                continue
+            results.append(
+                {
+                    "id": str(station.get("id", "")),
+                    "name": station.get("name", ""),
+                    "place": "",
+                    "area_type": "stop",
+                }
+            )
+        return results

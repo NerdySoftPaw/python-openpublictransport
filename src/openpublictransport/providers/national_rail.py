@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 import aiohttp
 
 from ..const import PROVIDER_NATIONAL_RAIL
-from ..exceptions import AuthenticationError
+from ..exceptions import ApiError, ApiResponseError, AuthenticationError, OpenPublicTransportError
 from ..models import UnifiedDeparture
 from .base import BaseProvider
 
@@ -161,7 +161,9 @@ class NationalRailProvider(BaseProvider):
         departures_limit: int,
     ) -> Optional[Dict]:
         """Fetch departures via OpenLDBWS SOAP for a given CRS code."""
-        if not self.api_key or not station_id:
+        if not self.api_key:
+            raise AuthenticationError(self.provider_name, 401, f"{self.provider_name}: an API key is required")
+        if not station_id:
             return None
 
         crs = station_id.strip().upper()
@@ -172,46 +174,34 @@ class NationalRailProvider(BaseProvider):
         )
 
         try:
-            async with self.session.post(
+            text = await self._request(
+                "post",
                 _ENDPOINT,
                 data=body.encode("utf-8"),
                 headers={
                     "Content-Type": "text/xml; charset=utf-8",
                     "SOAPAction": _SOAP_ACTION,
                 },
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                if resp.status in (401, 403):
-                    raise AuthenticationError(
-                        f"{self.provider_name}: authentication failed (HTTP {resp.status}) — check API key"
-                    )
-                if resp.status != 200:
-                    # Surface the SOAP fault reason (HTTP 500) instead of hiding it,
-                    # so genuine request/token faults are diagnosable.
-                    body = ""
-                    try:
-                        body = await resp.text()
-                    except Exception:  # pragma: no cover - defensive
-                        pass
-                    fault = _soap_fault_string(body)
-                    _LOGGER.warning(
-                        "%s: HTTP %s for CRS %s%s",
-                        self.provider_name,
-                        resp.status,
-                        crs,
-                        f" — {fault}" if fault else "",
-                    )
-                    return None
-                text = await resp.text()
-        except Exception as exc:
-            _LOGGER.warning("%s: request failed: %s", self.provider_name, exc)
-            return None
+                timeout=15,
+                response_format="text",
+            )
+        except ApiError as exc:
+            # OpenLDBWS reports token and request faults as an HTTP 500 SOAP
+            # fault; surface the reason rather than a bare status code.
+            fault = _soap_fault_string(exc.body or "")
+            if not fault:
+                raise
+            raise ApiError(
+                self.provider_name,
+                exc.status,
+                f"{self.provider_name}: HTTP {exc.status} for CRS {crs} — {fault}",
+                body=exc.body,
+            ) from exc
 
         try:
             root = ET.fromstring(_strip_namespaces(text))
         except ET.ParseError as exc:
-            _LOGGER.warning("%s: XML parse error: %s", self.provider_name, exc)
-            return None
+            raise ApiResponseError(f"{self.provider_name}: XML parse error ({exc})") from exc
 
         services = root.findall(".//service")
         if not services:
@@ -434,20 +424,24 @@ out 10;"""
 out 10;"""
 
         try:
-            async with self.session.post(
+            data = await self._request(
+                "post",
                 _OVERPASS_URL,
                 data={"data": query},
                 headers={
                     "User-Agent": "openpublictransport-homeassistant/1.0 (github.com/NerdySoftPaw/openpublictransport)"
                 },
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                if resp.status != 200:
-                    _LOGGER.warning("%s: Overpass HTTP %s", self.provider_name, resp.status)
-                    return None
-                data = await resp.json(content_type=None)
-        except Exception as exc:
-            _LOGGER.warning("%s: stop search failed: %s", self.provider_name, exc)
+                timeout=15,
+            )
+        except OpenPublicTransportError as exc:
+            # Deliberately swallowed: an unreachable or throttled Overpass is
+            # exactly what the bundled snapshot exists for. The caller reads
+            # None as "Overpass failed, fall back".
+            _LOGGER.warning("%s: Overpass unavailable (%s)", self.provider_name, exc)
+            return None
+
+        if not isinstance(data, dict):
+            _LOGGER.warning("%s: Overpass returned %s, expected an object", self.provider_name, type(data).__name__)
             return None
 
         results = []

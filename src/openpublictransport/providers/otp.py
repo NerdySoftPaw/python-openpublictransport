@@ -6,8 +6,6 @@ import math
 import time
 from typing import Any, Dict, List, Optional
 
-import aiohttp
-
 from .otp_base import OTPBaseProvider
 
 _LOGGER = logging.getLogger(__name__)
@@ -181,19 +179,13 @@ class OTPProvider(OTPBaseProvider):
 
     async def _graphql(self, query: str) -> Optional[Dict[str, Any]]:
         url = f"{self._effective_base_url}/index/graphql"
-        try:
-            async with self.session.post(
-                url,
-                json={"query": query},
-                headers=self._auth_headers(),
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                if resp.status == 200:
-                    return await resp.json()
-                _LOGGER.warning("%s GraphQL → HTTP %s", self.provider_name, resp.status)
-        except Exception as exc:
-            _LOGGER.warning("%s GraphQL request failed: %s", self.provider_name, exc)
-        return None
+        return await self._request(
+            "post",
+            url,
+            json={"query": query},
+            headers=self._auth_headers(),
+            timeout=15,
+        )
 
     def _raw_stops_from_body(self, body: Optional[Dict]) -> List[Dict[str, Any]]:
         return [

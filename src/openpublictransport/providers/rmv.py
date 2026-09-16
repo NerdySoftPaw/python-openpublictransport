@@ -6,11 +6,8 @@ from typing import Any, Dict, List, Optional, Union
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
-from ..exceptions import AuthenticationError
-
-import aiohttp
-
 from ..const import PROVIDER_RMV
+from ..exceptions import ApiResponseError, AuthenticationError
 from ..models import UnifiedDeparture
 from .base import BaseProvider
 
@@ -101,8 +98,7 @@ class RMVProvider(BaseProvider):
             return None
 
         if not self.api_key:
-            _LOGGER.error("RMV provider requires an API key")
-            return None
+            raise AuthenticationError("RMV", 401, "RMV: an API key is required")
 
         url = (
             f"{API_BASE}/departureBoard"
@@ -113,33 +109,18 @@ class RMVProvider(BaseProvider):
             f"&maxJourneys={departures_limit}"
         )
 
-        try:
-            async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if not isinstance(data, dict):
-                        return None
+        data = await self._request("get", url, timeout=15)
 
-                    if "errorCode" in data:
-                        _LOGGER.warning("RMV API error: %s", data.get("errorText", "unknown"))
-                        return None
+        if not isinstance(data, dict):
+            raise ApiResponseError(f"RMV: API returned {type(data).__name__} instead of an object")
 
-                    departures = data.get("Departure", [])
-                    if isinstance(departures, dict):
-                        departures = [departures]
-                    return {"stopEvents": departures}
-                elif response.status in (401, 403):
-                    raise AuthenticationError(
-                        f"RMV: authentication failed (HTTP {response.status}) — check API key"
-                    )
-                else:
-                    _LOGGER.warning("RMV API returned status %s", response.status)
-        except aiohttp.ClientError as e:
-            _LOGGER.warning("RMV API request failed: %s", e)
-        except Exception as e:
-            _LOGGER.warning("RMV API error: %s", e)
+        if "errorCode" in data:
+            raise ApiResponseError(f"RMV: API error {data.get('errorCode')}: {data.get('errorText', 'unknown')}")
 
-        return None
+        departures = data.get("Departure", [])
+        if isinstance(departures, dict):
+            departures = [departures]
+        return {"stopEvents": departures}
 
     def parse_departure(
         self, stop: Dict[str, Any], tz: Union[ZoneInfo, Any], now: datetime
@@ -224,8 +205,7 @@ class RMVProvider(BaseProvider):
 
     async def search_stops(self, search_term: str) -> List[Dict[str, Any]]:
         if not self.api_key:
-            _LOGGER.error("RMV provider requires an API key for stop search")
-            return []
+            raise AuthenticationError("RMV", 401, "RMV: an API key is required")
 
         url = (
             f"{API_BASE}/location.name"
@@ -236,47 +216,31 @@ class RMVProvider(BaseProvider):
             f"&type=S"
         )
 
-        try:
-            async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if not isinstance(data, dict):
-                        return []
+        data = await self._request("get", url, timeout=10)
 
-                    stop_locations = data.get("stopLocationOrCoordLocation", [])
-                    results = []
+        if not isinstance(data, dict):
+            raise ApiResponseError(f"RMV: API returned {type(data).__name__} instead of an object")
 
-                    for item in stop_locations:
-                        if not isinstance(item, dict):
-                            continue
-                        loc = item.get("StopLocation", {})
-                        if not loc:
-                            continue
+        results = []
+        for item in data.get("stopLocationOrCoordLocation", []):
+            if not isinstance(item, dict):
+                continue
+            loc = item.get("StopLocation", {})
+            if not loc:
+                continue
 
-                        name = loc.get("name", "")
-                        place = ""
-                        if "," in name:
-                            parts = name.split(",", 1)
-                            place = parts[0].strip()
+            name = loc.get("name", "")
+            place = ""
+            if "," in name:
+                parts = name.split(",", 1)
+                place = parts[0].strip()
 
-                        results.append(
-                            {
-                                "id": loc.get("extId", loc.get("id", "")),
-                                "name": name,
-                                "place": place,
-                                "area_type": "stop",
-                            }
-                        )
-                    return results
-                elif response.status in (401, 403):
-                    raise AuthenticationError(
-                        f"RMV: authentication failed (HTTP {response.status}) — check API key"
-                    )
-                else:
-                    _LOGGER.error("RMV API returned status %s", response.status)
-        except AuthenticationError:
-            raise
-        except Exception as e:
-            _LOGGER.error("Error searching RMV stops: %s", e)
-
-        return []
+            results.append(
+                {
+                    "id": loc.get("extId", loc.get("id", "")),
+                    "name": name,
+                    "place": place,
+                    "area_type": "stop",
+                }
+            )
+        return results

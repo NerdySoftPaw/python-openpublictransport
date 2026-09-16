@@ -23,8 +23,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Union
 from zoneinfo import ZoneInfo
 
-import aiohttp
-
+from ..exceptions import ApiResponseError
 from ..models import UnifiedDeparture
 from .hafas_base import DEFAULT_CATEGORY_MAPPING
 from .base import BaseProvider
@@ -129,7 +128,12 @@ class HafasMgateBaseProvider(BaseProvider):
     def get_catout_mapping(self) -> Dict[str, str]:
         return CATOUT_MAPPING
 
-    async def _request(self, svc_req: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def _mgate_request(self, svc_req: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Call the mgate gateway and return the service result payload.
+
+        Raises the library's API exceptions on transport failures, and
+        ApiResponseError when mgate reports a protocol-level error.
+        """
         body = {
             "lang": self.mgate_lang,
             "svcReqL": [svc_req],
@@ -141,33 +145,24 @@ class HafasMgateBaseProvider(BaseProvider):
         raw = json.dumps(body, separators=(",", ":")).encode("utf-8")
         url = self.mgate_endpoint + self._signature_query(raw)
 
-        try:
-            async with self.session.post(
-                url,
-                data=raw,
-                headers={"Content-Type": "application/json", "Accept": "application/json"},
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as response:
-                if response.status != 200:
-                    _LOGGER.warning(
-                        "%s mgate returned status %s", self.provider_name, response.status
-                    )
-                    return None
-                data = await response.json(content_type=None)
-        except aiohttp.ClientError as e:
-            _LOGGER.warning("%s mgate request failed: %s", self.provider_name, e)
-            return None
-        except Exception as e:  # noqa: BLE001
-            _LOGGER.warning("%s mgate error: %s", self.provider_name, e)
-            return None
+        data = await self._request(
+            "post",
+            url,
+            data=raw,
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            timeout=15,
+        )
+
+        if not isinstance(data, dict):
+            raise ApiResponseError(f"{self.provider_name}: mgate returned {type(data).__name__} instead of an object")
 
         if data.get("err") and data.get("err") != "OK":
-            _LOGGER.warning("%s mgate error %s: %s", self.provider_name, data.get("err"), data.get("errTxt", ""))
-            return None
+            raise ApiResponseError(
+                f"{self.provider_name}: mgate error {data.get('err')} {data.get('errTxt', '')}".strip()
+            )
         svc = (data.get("svcResL") or [{}])[0]
         if svc.get("err") and svc.get("err") != "OK":
-            _LOGGER.warning("%s mgate service error %s", self.provider_name, svc.get("err"))
-            return None
+            raise ApiResponseError(f"{self.provider_name}: mgate service error {svc.get('err')}")
         return svc.get("res")
 
     def _signature_query(self, raw: bytes) -> str:
@@ -185,7 +180,7 @@ class HafasMgateBaseProvider(BaseProvider):
             "meth": "LocMatch",
             "req": {"input": {"field": "S", "loc": {"type": "S", "name": search_term + "?"}, "maxLoc": 12}},
         }
-        res = await self._request(svc)
+        res = await self._mgate_request(svc)
         if not res:
             return []
         return self._stops_from_locmatch(res)
@@ -219,7 +214,7 @@ class HafasMgateBaseProvider(BaseProvider):
             "meth": "StationBoard",
             "req": {"type": "DEP", "stbLoc": stb_loc, "maxJny": departures_limit},
         }
-        res = await self._request(svc)
+        res = await self._mgate_request(svc)
         if res is None:
             return None
 

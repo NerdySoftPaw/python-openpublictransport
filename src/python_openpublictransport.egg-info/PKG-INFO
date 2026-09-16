@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: python-openpublictransport
-Version: 0.1.2
+Version: 0.2.0
 Summary: Python library for public transport APIs (EFA, OTP2, TRIAS, FPTF, HAFAS, GTFS-RT)
 License: MIT
 Requires-Python: >=3.11

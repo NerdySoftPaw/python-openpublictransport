@@ -1,17 +1,12 @@
 """NTA (National Transport Authority, Ireland) provider implementation."""
 
-import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Union
 from zoneinfo import ZoneInfo
 
-from ..exceptions import AuthenticationError
-
-import aiohttp
-from aiohttp import ClientConnectorError
-
 from ..const import API_BASE_URL_NTA_GTFSR, NTA_TRANSPORTATION_TYPES, PROVIDER_NTA_IE
+from ..exceptions import ApiResponseError, AuthenticationError
 from ..models import UnifiedDeparture
 from ..parsers import parse_departure_generic
 from .base import BaseProvider
@@ -48,8 +43,7 @@ class NTAProvider(BaseProvider):
         departures_limit: int,
     ) -> Optional[Dict[str, Any]]:
         if not self.api_key:
-            _LOGGER.error("NTA API key is required")
-            return None
+            raise AuthenticationError("NTA", 401, "NTA: an API key is required")
 
         if not station_id:
             _LOGGER.error("NTA requires a station ID (stop_id)")
@@ -63,206 +57,164 @@ class NTAProvider(BaseProvider):
             "x-api-key": self.api_key,
         }
 
-        max_retries = 3
-        current_api_key = self.api_key
-        for attempt in range(1, max_retries + 1):
+        json_data = await self._fetch_trip_updates(url, params, headers)
+
+        if not isinstance(json_data, dict):
+            raise ApiResponseError(f"NTA: API returned {type(json_data).__name__} instead of an object")
+
+        entities = json_data.get("entity", [])
+        if not isinstance(entities, list):
+            _LOGGER.debug("NTA API response missing or invalid 'entity' field")
+            return {"stopEvents": []}
+
+        entity_count = len(entities)
+        if entity_count == 0:
+            _LOGGER.debug("NTA API returned empty entities list")
+            return {"stopEvents": []}
+
+        _LOGGER.info(
+            "NTA API returned %d entities (processing for stop %s)", entity_count, station_id
+        )
+
+        stop_events = []
+        target_stop_id = station_id
+        max_departures = departures_limit * 3
+        processed_entities = 0
+
+        now = datetime.now(timezone.utc)
+
+        for entity in entities:
+            if not isinstance(entity, dict):
+                continue
+
+            trip_update = entity.get("trip_update")
+            if not isinstance(trip_update, dict):
+                continue
+
+            stop_time_updates = trip_update.get("stop_time_update", [])
+            if not isinstance(stop_time_updates, list) or len(stop_time_updates) == 0:
+                continue
+
+            matching_stop_time = None
+            for stop_time_update in stop_time_updates:
+                if not isinstance(stop_time_update, dict):
+                    continue
+                stop_id = stop_time_update.get("stop_id")
+                if stop_id == target_stop_id:
+                    matching_stop_time = stop_time_update
+                    break
+
+            if matching_stop_time is None:
+                continue
+
+            trip = trip_update.get("trip", {})
+            if not isinstance(trip, dict):
+                continue
+
+            stop_time_update = matching_stop_time
+
+            route_id = trip.get("route_id", "")
+            trip_id = trip.get("trip_id", "")
+            stop_id = stop_time_update.get("stop_id", target_stop_id)
+
+            route_short_name = route_id.split("_")[0] if route_id else ""
+
+            route_type = 3
+            if route_short_name and route_short_name.lower() in ["red", "green", "luas"]:
+                route_type = 0
+
+            departure = stop_time_update.get("departure", {})
+            arrival = stop_time_update.get("arrival", {})
+            delay_seconds = departure.get("delay") or arrival.get("delay") or 0
+
+            schedule_relationship = stop_time_update.get("schedule_relationship", "SCHEDULED")
+            if schedule_relationship in ["CANCELED", "SKIPPED"]:
+                continue
+
+            destination = route_short_name or "Unknown"
+
+            departure_time = departure.get("time")
+            arrival_time = arrival.get("time")
+
+            if departure_time:
+                try:
+                    planned_time = datetime.fromtimestamp(departure_time, tz=now.tzinfo)
+                    estimated_time = planned_time + timedelta(seconds=delay_seconds)
+                except (ValueError, OSError):
+                    planned_time = now
+                    estimated_time = now + timedelta(seconds=delay_seconds)
+            elif arrival_time:
+                try:
+                    planned_time = datetime.fromtimestamp(arrival_time, tz=now.tzinfo)
+                    estimated_time = planned_time + timedelta(seconds=delay_seconds)
+                except (ValueError, OSError):
+                    planned_time = now
+                    estimated_time = now + timedelta(seconds=delay_seconds)
+            else:
+                planned_time = now
+                estimated_time = now + timedelta(seconds=delay_seconds)
+
+            planned_time_str = planned_time.strftime("%Y-%m-%dT%H:%M:%S%z")
+            estimated_time_str = estimated_time.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+            platform = (
+                stop_time_update.get("platform_code") or stop_time_update.get("platform") or ""
+            )
+
+            stop_event = {
+                "departureTimePlanned": planned_time_str,
+                "departureTimeEstimated": estimated_time_str,
+                "transportation": {
+                    "number": route_short_name,
+                    "description": "",
+                    "destination": {"name": destination},
+                    "product": {"class": route_type},
+                },
+                "platform": {"name": platform},
+                "realtimeStatus": ["MONITORED"] if delay_seconds != 0 else [],
+                "route_id": route_id,
+                "trip_id": trip_id,
+                "stop_id": stop_id,
+                "delay_seconds": delay_seconds,
+            }
+            stop_events.append(stop_event)
+            processed_entities += 1
+
+            if len(stop_events) >= max_departures:
+                break
+
+        _LOGGER.info(
+            "NTA: Processed %d/%d entities, found %d departures for stop %s",
+            processed_entities,
+            entity_count,
+            len(stop_events),
+            target_stop_id,
+        )
+        return {"stopEvents": stop_events}
+
+    async def _fetch_trip_updates(
+        self,
+        url: str,
+        params: Dict[str, Any],
+        headers: Dict[str, str],
+    ) -> Any:
+        """Fetch GTFS-R trip updates, falling back to the secondary API key.
+
+        NTA hands out two keys; a rejected primary key is not a hard failure as
+        long as the secondary one still works.
+        """
+        keys = [key for key in (self.api_key, self.api_key_secondary) if key]
+        last_auth_error: Optional[AuthenticationError] = None
+
+        for key in keys:
+            headers["x-api-key"] = key
             try:
-                headers["x-api-key"] = current_api_key
+                return await self._request("get", url, params=params, headers=headers, timeout=15, retries=3)
+            except AuthenticationError as err:
+                last_auth_error = err
+                _LOGGER.info("NTA key rejected (HTTP %s), trying the next key", err.status)
 
-                async with self.session.get(
-                    url, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=15)
-                ) as response:
-                    if response.status == 200:
-                        try:
-                            json_data = await response.json()
-
-                            if not isinstance(json_data, dict):
-                                _LOGGER.warning("NTA API returned non-dict response: %s", type(json_data))
-                                return None
-
-                            entities = json_data.get("entity", [])
-                            if not isinstance(entities, list):
-                                _LOGGER.debug("NTA API response missing or invalid 'entity' field")
-                                return {"stopEvents": []}
-
-                            entity_count = len(entities)
-                            if entity_count == 0:
-                                _LOGGER.debug("NTA API returned empty entities list")
-                                return {"stopEvents": []}
-
-                            _LOGGER.info(
-                                "NTA API returned %d entities (processing for stop %s)", entity_count, station_id
-                            )
-
-                            stop_events = []
-                            target_stop_id = station_id
-                            max_departures = departures_limit * 3
-                            processed_entities = 0
-
-                            now = datetime.now(timezone.utc)
-
-                            for entity in entities:
-                                if not isinstance(entity, dict):
-                                    continue
-
-                                trip_update = entity.get("trip_update")
-                                if not isinstance(trip_update, dict):
-                                    continue
-
-                                stop_time_updates = trip_update.get("stop_time_update", [])
-                                if not isinstance(stop_time_updates, list) or len(stop_time_updates) == 0:
-                                    continue
-
-                                matching_stop_time = None
-                                for stop_time_update in stop_time_updates:
-                                    if not isinstance(stop_time_update, dict):
-                                        continue
-                                    stop_id = stop_time_update.get("stop_id")
-                                    if stop_id == target_stop_id:
-                                        matching_stop_time = stop_time_update
-                                        break
-
-                                if matching_stop_time is None:
-                                    continue
-
-                                trip = trip_update.get("trip", {})
-                                if not isinstance(trip, dict):
-                                    continue
-
-                                stop_time_update = matching_stop_time
-
-                                route_id = trip.get("route_id", "")
-                                trip_id = trip.get("trip_id", "")
-                                stop_id = stop_time_update.get("stop_id", target_stop_id)
-
-                                route_short_name = route_id.split("_")[0] if route_id else ""
-
-                                route_type = 3
-                                if route_short_name and route_short_name.lower() in ["red", "green", "luas"]:
-                                    route_type = 0
-
-                                departure = stop_time_update.get("departure", {})
-                                arrival = stop_time_update.get("arrival", {})
-                                delay_seconds = departure.get("delay") or arrival.get("delay") or 0
-
-                                schedule_relationship = stop_time_update.get("schedule_relationship", "SCHEDULED")
-                                if schedule_relationship in ["CANCELED", "SKIPPED"]:
-                                    continue
-
-                                destination = route_short_name or "Unknown"
-
-                                departure_time = departure.get("time")
-                                arrival_time = arrival.get("time")
-
-                                if departure_time:
-                                    try:
-                                        planned_time = datetime.fromtimestamp(departure_time, tz=now.tzinfo)
-                                        estimated_time = planned_time + timedelta(seconds=delay_seconds)
-                                    except (ValueError, OSError):
-                                        planned_time = now
-                                        estimated_time = now + timedelta(seconds=delay_seconds)
-                                elif arrival_time:
-                                    try:
-                                        planned_time = datetime.fromtimestamp(arrival_time, tz=now.tzinfo)
-                                        estimated_time = planned_time + timedelta(seconds=delay_seconds)
-                                    except (ValueError, OSError):
-                                        planned_time = now
-                                        estimated_time = now + timedelta(seconds=delay_seconds)
-                                else:
-                                    planned_time = now
-                                    estimated_time = now + timedelta(seconds=delay_seconds)
-
-                                planned_time_str = planned_time.strftime("%Y-%m-%dT%H:%M:%S%z")
-                                estimated_time_str = estimated_time.strftime("%Y-%m-%dT%H:%M:%S%z")
-
-                                platform = (
-                                    stop_time_update.get("platform_code") or stop_time_update.get("platform") or ""
-                                )
-
-                                stop_event = {
-                                    "departureTimePlanned": planned_time_str,
-                                    "departureTimeEstimated": estimated_time_str,
-                                    "transportation": {
-                                        "number": route_short_name,
-                                        "description": "",
-                                        "destination": {"name": destination},
-                                        "product": {"class": route_type},
-                                    },
-                                    "platform": {"name": platform},
-                                    "realtimeStatus": ["MONITORED"] if delay_seconds != 0 else [],
-                                    "route_id": route_id,
-                                    "trip_id": trip_id,
-                                    "stop_id": stop_id,
-                                    "delay_seconds": delay_seconds,
-                                }
-                                stop_events.append(stop_event)
-                                processed_entities += 1
-
-                                if len(stop_events) >= max_departures:
-                                    break
-
-                            _LOGGER.info(
-                                "NTA: Processed %d/%d entities, found %d departures for stop %s",
-                                processed_entities,
-                                entity_count,
-                                len(stop_events),
-                                target_stop_id,
-                            )
-                            return {"stopEvents": stop_events}
-
-                        except (ValueError, aiohttp.ContentTypeError) as e:
-                            _LOGGER.warning("NTA API returned invalid JSON: %s", e)
-                            return None
-                        except Exception as e:
-                            _LOGGER.warning("NTA API JSON parsing failed: %s", e, exc_info=True)
-                            return None
-                    elif response.status == 404:
-                        _LOGGER.warning("NTA API endpoint not found (404)")
-                        return None
-                    elif response.status in (401, 403):
-                        if self.api_key_secondary and current_api_key == self.api_key:
-                            _LOGGER.info("NTA primary key failed (HTTP %s), trying secondary...", response.status)
-                            current_api_key = self.api_key_secondary
-                            continue
-                        raise AuthenticationError(
-                            f"NTA: authentication failed (HTTP {response.status}) — check API key(s)"
-                        )
-                    elif response.status >= 500:
-                        _LOGGER.warning(
-                            "NTA API server error (status %s) on attempt %d/%d",
-                            response.status,
-                            attempt,
-                            max_retries,
-                        )
-                        if attempt < max_retries:
-                            await asyncio.sleep(2**attempt)
-                            continue
-                        return None
-                    else:
-                        _LOGGER.warning(
-                            "NTA API returned status %s on attempt %d/%d", response.status, attempt, max_retries
-                        )
-                        if attempt < max_retries:
-                            await asyncio.sleep(2**attempt)
-                            continue
-
-            except asyncio.TimeoutError:
-                _LOGGER.warning("NTA API timeout on attempt %d/%d", attempt, max_retries)
-                if attempt < max_retries:
-                    await asyncio.sleep(2**attempt)
-                    continue
-            except ClientConnectorError as e:
-                _LOGGER.warning("NTA API connection error on attempt %d/%d: %s", attempt, max_retries, e)
-                if attempt < max_retries:
-                    await asyncio.sleep(2**attempt)
-                    continue
-            except Exception as e:
-                _LOGGER.warning("NTA API attempt %d/%d failed: %s", attempt, max_retries, e)
-                if attempt < max_retries:
-                    await asyncio.sleep(2**attempt)
-                    continue
-
-        return None
+        raise last_auth_error if last_auth_error else AuthenticationError("NTA", 401, "NTA: no API key configured")
 
     def parse_departure(
         self, stop: Dict[str, Any], tz: Union[ZoneInfo, Any], now: datetime

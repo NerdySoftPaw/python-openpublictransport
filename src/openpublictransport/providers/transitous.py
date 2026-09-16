@@ -6,9 +6,8 @@ from typing import Any, Dict, List, Optional, Union
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
-import aiohttp
-
 from ..const import PROVIDER_TRANSITOUS
+from ..exceptions import ApiResponseError
 from ..models import UnifiedDeparture
 from .base import BaseProvider
 
@@ -73,23 +72,12 @@ class TransitousProvider(BaseProvider):
 
         url = f"{API_BASE}/v5/stoptimes?stopId={quote(station_id, safe='')}&n={departures_limit}"
 
-        try:
-            async with self.session.get(
-                url, headers={"User-Agent": USER_AGENT}, timeout=aiohttp.ClientTimeout(total=15)
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if not isinstance(data, dict):
-                        return None
-                    return {"stopEvents": data.get("stopTimes", [])}
-                else:
-                    _LOGGER.warning("Transitous API returned status %s", response.status)
-        except aiohttp.ClientError as e:
-            _LOGGER.warning("Transitous API request failed: %s", e)
-        except Exception as e:
-            _LOGGER.warning("Transitous API error: %s", e)
+        data = await self._request("get", url, headers={"User-Agent": USER_AGENT}, timeout=15)
 
-        return None
+        if not isinstance(data, dict):
+            raise ApiResponseError(f"Transitous: API returned {type(data).__name__} instead of an object")
+
+        return {"stopEvents": data.get("stopTimes", [])}
 
     def parse_departure(
         self, stop: Dict[str, Any], tz: Union[ZoneInfo, Any], now: datetime
@@ -167,32 +155,21 @@ class TransitousProvider(BaseProvider):
     async def search_stops(self, search_term: str) -> List[Dict[str, Any]]:
         url = f"{API_BASE}/v1/geocode?text={quote(search_term, safe='')}&type=STOP"
 
-        try:
-            async with self.session.get(
-                url, headers={"User-Agent": USER_AGENT}, timeout=aiohttp.ClientTimeout(total=10)
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if not isinstance(data, list):
-                        return []
+        data = await self._request("get", url, headers={"User-Agent": USER_AGENT}, timeout=10)
 
-                    results = []
-                    for location in data:
-                        if not isinstance(location, dict):
-                            continue
-                        name = location.get("name", "")
-                        results.append(
-                            {
-                                "id": location.get("id", ""),
-                                "name": name,
-                                "place": "",
-                                "area_type": "stop",
-                            }
-                        )
-                    return results
-                else:
-                    _LOGGER.error("Transitous API returned status %s", response.status)
-        except Exception as e:
-            _LOGGER.error("Error searching Transitous stops: %s", e)
+        if not isinstance(data, list):
+            raise ApiResponseError(f"Transitous: API returned {type(data).__name__} instead of a list")
 
-        return []
+        results = []
+        for location in data:
+            if not isinstance(location, dict):
+                continue
+            results.append(
+                {
+                    "id": location.get("id", ""),
+                    "name": location.get("name", ""),
+                    "place": "",
+                    "area_type": "stop",
+                }
+            )
+        return results
