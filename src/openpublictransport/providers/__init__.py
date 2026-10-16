@@ -62,6 +62,7 @@ from ..const import (
     PROVIDER_TFNSW,
     PROVIDER_DIGITRANSIT,
     PROVIDER_GOLEMIO,
+    PROVIDER_CTA_US,
 )
 from .avv import AVVProvider
 from .base import BaseProvider
@@ -121,6 +122,7 @@ from .tfl import TfLProvider
 from .tfnsw import TfNSWProvider
 from .digitransit import DigitransitProvider
 from .golemio import GolemioProvider
+from .cta import CTAProvider
 
 _PROVIDER_REGISTRY: Dict[str, Type[BaseProvider]] = {}
 
@@ -223,4 +225,5 @@ register_provider(PROVIDER_TFL, TfLProvider)
 register_provider(PROVIDER_TFNSW, TfNSWProvider)
 register_provider(PROVIDER_DIGITRANSIT, DigitransitProvider)
 register_provider(PROVIDER_GOLEMIO, GolemioProvider)
+register_provider(PROVIDER_CTA_US, CTAProvider)
 register_provider(PROVIDER_HVV_GTI, HVVGTIProvider)
