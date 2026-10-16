@@ -123,3 +123,82 @@ def test_mgate_without_realtime_time_is_scheduled(cls):
     assert dep is not None
     assert dep.is_realtime is False
     assert dep.delay == 0
+
+
+# -- HAFAS mgate trip search --------------------------------------------------
+
+def _trip_search_response():
+    return {"svcResL": [{"res": {
+        "common": {
+            "locL": [{"name": "Erfurt Hbf"}, {"name": "Jena West"}, {"name": "Jena, Westbahnhof"}, {"name": "Jena Paradies"}],
+            "prodL": [
+                {"name": "RE1", "prodCtx": {"catOut": "Zug", "catOutL": "Zug"}},
+                {"name": "5", "prodCtx": {"catOut": "Strab", "catOutL": "Straßenbahn"}},
+            ],
+        },
+        "outConL": [{
+            "date": "20261016", "dur": "005300", "chg": 1,
+            "secL": [
+                {"type": "JNY", "dep": {"locX": 0, "dTimeS": "195200", "dTimeR": "200800", "dPltfS": {"txt": "4"}},
+                 "arr": {"locX": 1, "aTimeS": "201700", "aTimeR": "203300"}, "jny": {"prodX": 0, "dirTxt": "Göttingen"}},
+                {"type": "WALK", "dep": {"locX": 1, "dTimeS": "203300"}, "arr": {"locX": 2, "aTimeS": "203700"}},
+                {"type": "JNY", "dep": {"locX": 2, "dTimeS": "203900"}, "arr": {"locX": 3, "aTimeS": "204500"},
+                 "jny": {"prodX": 1, "dirTxt": "Lobeda", "isCncl": True}},
+            ],
+        }, {
+            "date": "20261016", "dur": "010000", "chg": 0,
+            "secL": [{"type": "WALK", "dep": {"locX": 0, "dTimeS": "200000"}, "arr": {"locX": 3, "aTimeS": "210000"}}],
+        }],
+    }}]}
+
+
+async def test_search_trips_builds_request_and_parses_connections():
+    provider = VMTProvider(session=None)
+    provider._request = AsyncMock(return_value=_trip_search_response())
+
+    trips = await provider.search_trips(
+        "A=1@L=1@", "A=1@L=4@", departure_time=datetime(2026, 10, 16, 17, 50, tzinfo=ZoneInfo("UTC"))
+    )
+
+    req = json.loads(provider._request.call_args.kwargs["data"])["svcReqL"][0]
+    assert req["meth"] == "TripSearch"
+    assert req["req"]["depLocL"] == [{"lid": "A=1@L=1@"}]
+    assert req["req"]["arrLocL"] == [{"lid": "A=1@L=4@"}]
+    # 17:50 UTC is 19:50 in Berlin
+    assert (req["req"]["outDate"], req["req"]["outTime"]) == ("20261016", "195000")
+
+    # The walk-only connection is dropped
+    assert len(trips) == 1
+    trip = trips[0]
+    assert trip["duration_minutes"] == 53
+    assert trip["transfers"] == 1
+
+    train, walk, tram = trip["legs"]
+    assert (train["mode"], train["line"], train["transport_type"]) == ("transit", "RE1", "train")
+    assert (train["origin"], train["destination"], train["platform"]) == ("Erfurt Hbf", "Jena West", "4")
+    assert train["departure_planned"] == datetime(2026, 10, 16, 19, 52, tzinfo=TZ)
+    assert train["departure"] == datetime(2026, 10, 16, 20, 8, tzinfo=TZ)
+    assert train["direction"] == "Göttingen"
+    assert walk["mode"] == "walk"
+    assert walk["transport_type"] == "walk"
+    assert tram["transport_type"] == "tram"
+    assert tram["cancelled"] is True
+    assert tram["departure"] == tram["departure_planned"]
+
+
+async def test_search_trips_with_extid_and_empty_result():
+    provider = SaarVVProvider(session=None)
+    provider._request = AsyncMock(return_value={"svcResL": [{"res": {}}]})
+
+    assert await provider.search_trips("8000323", "8005265") == []
+    req = json.loads(provider._request.call_args.kwargs["data"])["svcReqL"][0]["req"]
+    assert req["depLocL"] == [{"type": "S", "extId": "8000323"}]
+
+
+@pytest.mark.parametrize("cat_out, cat_out_l, expected", [
+    ("Strab", "Straßenbahn", "tram"), ("Strb", "Strb", "tram"), ("Zug", "Zug", "train"),
+    ("DRE", "Regional-Express", "train"), ("Xyz", "Regionalbus", "bus"), ("Q", "Expressbus", "bus"),
+])
+def test_german_category_labels(cat_out, cat_out_l, expected):
+    prod = {"prodCtx": {"catOut": cat_out, "catOutL": cat_out_l}}
+    assert VMTProvider(session=None)._transport_type(prod) == expected
