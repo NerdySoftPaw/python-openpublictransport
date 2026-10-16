@@ -202,3 +202,22 @@ async def test_search_trips_with_extid_and_empty_result():
 def test_german_category_labels(cat_out, cat_out_l, expected):
     prod = {"prodCtx": {"catOut": cat_out, "catOutL": cat_out_l}}
     assert VMTProvider(session=None)._transport_type(prod) == expected
+
+
+async def test_search_trips_arrive_by():
+    provider = NAHSHProvider(session=None)
+    provider._request = AsyncMock(return_value={"svcResL": [{"res": {}}]})
+
+    await provider.search_trips("A=1@L=1@", "A=1@L=2@", arrival_time=datetime(2026, 10, 17, 6, 0, tzinfo=ZoneInfo("UTC")))
+
+    req = json.loads(provider._request.call_args.kwargs["data"])["svcReqL"][0]["req"]
+    assert req["outFrwd"] is False
+    # 06:00 UTC is 08:00 in Berlin
+    assert (req["outDate"], req["outTime"]) == ("20261017", "080000")
+
+
+async def test_search_trips_departure_stays_forward():
+    provider = NAHSHProvider(session=None)
+    provider._request = AsyncMock(return_value={"svcResL": [{"res": {}}]})
+    await provider.search_trips("A=1@L=1@", "A=1@L=2@")
+    assert json.loads(provider._request.call_args.kwargs["data"])["svcReqL"][0]["req"]["outFrwd"] is True
