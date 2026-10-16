@@ -1,4 +1,4 @@
-"""Generic OTP2 provider base — used by the community server and custom instances."""
+"""Generic OTP2 provider base — used by self-hosted OTP2 instances (otp_custom)."""
 
 import asyncio
 import logging

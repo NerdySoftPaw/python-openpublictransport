@@ -18,7 +18,6 @@ from ..const import (
     PROVIDER_NVBW,
     PROVIDER_NWL,
     PROVIDER_OEBB,
-    PROVIDER_OPT,
     PROVIDER_OTP_CUSTOM,
     PROVIDER_RMV,
     PROVIDER_RVV,
@@ -50,7 +49,6 @@ from .bsvg import BSVGProvider
 from .bvg import BVGProvider
 from .db import DBProvider
 from .ding import DINGProvider
-from .gtfsde import OPTProvider
 from .hvv import HVVProvider
 from .hvv_gti import HVVGTIProvider
 from .kvv import KVVProvider
@@ -152,7 +150,6 @@ register_provider(PROVIDER_TRANSITOUS, TransitousProvider)
 register_provider(PROVIDER_DB, DBProvider)
 register_provider(PROVIDER_VBN_OTP, VBNOTPProvider)
 register_provider(PROVIDER_VBN_TRIAS, VBNTriasProvider)
-register_provider(PROVIDER_OPT, OPTProvider)
 register_provider(PROVIDER_OTP_CUSTOM, OTPCustomProvider)
 register_provider(PROVIDER_NATIONAL_RAIL, NationalRailProvider)
 register_provider(PROVIDER_REJSEPLANEN, RejseplanenProvider)
