@@ -54,6 +54,8 @@ class OTPBaseProvider(BaseProvider):
     """Base class for OpenTripPlanner REST API providers."""
 
     otp_base_url: str = ""
+    # ISO country code(s) Nominatim restricts the stop-name geocoding to.
+    geocode_countries: str = "de"
     stop_search_radius: int = 500
 
     def get_timezone(self) -> str:
@@ -88,12 +90,12 @@ class OTPBaseProvider(BaseProvider):
 
         for i, candidate in enumerate(_nominatim_candidates(search_term)):
             if i > 0:
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(1)  # Nominatim usage policy: at most 1 request/s
             try:
                 results = await self._request(
                     "get",
                     _NOMINATIM_URL,
-                    params={"q": candidate, "format": "json", "limit": 1, "countrycodes": "de"},
+                    params={"q": candidate, "format": "json", "limit": 1, "countrycodes": self.geocode_countries},
                     headers={"User-Agent": _NOMINATIM_UA, "Accept": "application/json"},
                     timeout=10,
                 )
@@ -170,7 +172,18 @@ class OTPBaseProvider(BaseProvider):
                     "omitNonPickups": "true",
                 },
             ),
+            return_exceptions=True,
         )
+        # Departures are what matters: a server without the routes/alerts index
+        # endpoints (TriMet, LA Metro answer /alerts with HTTP 500) still works.
+        if isinstance(stoptimes, BaseException):
+            raise stoptimes
+        if isinstance(routes_data, BaseException):
+            _LOGGER.debug("%s: route lookup failed: %s", self.provider_name, routes_data)
+            routes_data = None
+        if isinstance(alerts_data, BaseException):
+            _LOGGER.debug("%s: alerts lookup failed: %s", self.provider_name, alerts_data)
+            alerts_data = None
 
         route_map: Dict[str, Dict[str, str]] = {}
         if routes_data:
@@ -202,6 +215,10 @@ class OTPBaseProvider(BaseProvider):
                 continue
             pattern = group.get("pattern", {})
             route_id = pattern.get("routeId", "")
+            if not route_id and str(pattern.get("id", "")).count(":") >= 3:
+                # OTP 1 pattern ids are "<agency>:<route>:<direction>:<n>" (TriMet
+                # omits routeId), so the route is the first two parts.
+                route_id = ":".join(str(pattern["id"]).split(":")[:2])
             route_info = route_map.get(route_id, {})
 
             for t in group.get("times", []):

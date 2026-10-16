@@ -8,8 +8,9 @@ Responses use an indirection model: each journey references shared objects
 
 Some deployments additionally require a signed request (an MD5 ``checksum`` or a
 ``mic``/``mac`` pair derived from a salt). That is supported here via
-:attr:`checksum_salt` / :attr:`mic_mac_salt`, but every endpoint we currently
-ship is **unsigned** (no salt in the public-transport/transport-apis catalogue).
+:attr:`checksum_salt` / :attr:`mic_mac_salt`, given exactly as the
+public-transport/transport-apis catalogue lists them (hex), and signed the same
+way as hafas-client.
 
 A concrete provider sets :attr:`mgate_endpoint`, :attr:`mgate_auth`,
 :attr:`mgate_client`, :attr:`mgate_ver` and :attr:`timezone`. See
@@ -51,6 +52,9 @@ CATOUT_MAPPING: Dict[str, str] = {
     "STRB": "tram",
     "ZUG": "train",
     "DRE": "train",
+    "ECE": "train",  # Eurocity-Express
+    "SEV": "bus",  # Schienenersatzverkehr (rail replacement bus)
+    "BSV": "bus",
 }
 
 # Substring fallbacks scanned against the lower-cased category when there is no
@@ -102,6 +106,14 @@ def _hafas_datetime(
         return None
 
 
+def _salt_bytes(salt: str) -> bytes:
+    """Decode a signing salt like hafas-client: hex when it is hex, else UTF-8."""
+    try:
+        return bytes.fromhex(salt)
+    except ValueError:
+        return salt.encode("utf-8")
+
+
 def _duration_minutes(dur: str) -> int:
     """Convert a HAFAS ``[dd]HHMMSS`` duration into minutes."""
     if not dur or not dur.isdigit():
@@ -136,8 +148,10 @@ class HafasMgateBaseProvider(BaseProvider):
     mgate_client: Dict[str, Any] = {}
     mgate_ver: str = "1.18"
     mgate_lang: str = "en"
+    # Optional client extension id some deployments expect (e.g. "NVV.6.0").
+    mgate_ext: Optional[str] = None
     timezone: str = "Europe/Berlin"
-    # Optional request signing (unset for every endpoint we ship).
+    # Optional request signing; salts as hex strings from the catalogue.
     checksum_salt: Optional[str] = None
     mic_mac_salt: Optional[str] = None
 
@@ -161,6 +175,8 @@ class HafasMgateBaseProvider(BaseProvider):
             "auth": self.mgate_auth,
             "formatted": False,
         }
+        if self.mgate_ext:
+            body["ext"] = self.mgate_ext
         raw = json.dumps(body, separators=(",", ":")).encode("utf-8")
         url = self.mgate_endpoint + self._signature_query(raw)
 
@@ -186,11 +202,11 @@ class HafasMgateBaseProvider(BaseProvider):
 
     def _signature_query(self, raw: bytes) -> str:
         if self.checksum_salt:
-            checksum = hashlib.md5(raw + self.checksum_salt.encode("utf-8")).hexdigest()
+            checksum = hashlib.md5(raw + _salt_bytes(self.checksum_salt)).hexdigest()
             return f"?checksum={checksum}"
         if self.mic_mac_salt:
             mic = hashlib.md5(raw).hexdigest()
-            mac = hashlib.md5(mic.encode("utf-8") + self.mic_mac_salt.encode("utf-8")).hexdigest()
+            mac = hashlib.md5(mic.encode("utf-8") + _salt_bytes(self.mic_mac_salt)).hexdigest()
             return f"?mic={mic}&mac={mac}"
         return ""
 
@@ -361,6 +377,7 @@ class HafasMgateBaseProvider(BaseProvider):
                 jny = sec.get("jny") or {}
                 is_transit = sec.get("type") == "JNY"
                 prod = pick(prods, jny.get("prodX")) if is_transit else {}
+                ctx = prod.get("prodCtx") or {}
                 dep_planned = _hafas_datetime(date_str, dep.get("dTimeS", ""), tz)
                 arr_planned = _hafas_datetime(date_str, arr.get("aTimeS", ""), tz)
                 if not dep_planned or not arr_planned:
@@ -371,7 +388,7 @@ class HafasMgateBaseProvider(BaseProvider):
                         "origin": pick(locs, dep.get("locX")).get("name", ""),
                         "destination": pick(locs, arr.get("locX")).get("name", ""),
                         "line": (prod.get("name") or prod.get("nameS") or "").strip(),
-                        "product": (prod.get("prodCtx", {}).get("catOutL") or prod.get("prodCtx", {}).get("catOut") or "").strip(),
+                        "product": (ctx.get("catOutL") or ctx.get("catOut") or "").strip(),
                         "transport_type": self._transport_type(prod) if is_transit else "walk",
                         "direction": jny.get("dirTxt", ""),
                         "platform": _platform(dep, bool(dep.get("dTimeR"))),
