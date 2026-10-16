@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 from xml.etree import ElementTree as ET
+from xml.sax.saxutils import escape
 from zoneinfo import ZoneInfo
 
 from ..exceptions import ApiResponseError
@@ -125,6 +126,45 @@ class TRIASBaseProvider(BaseProvider):
 
     def _extra_headers(self) -> Dict[str, str]:
         return {}
+
+    def _build_trip_request(
+        self, origin_id: str, destination_id: str, departure_time: Optional[datetime], limit: int
+    ) -> str:
+        if not origin_id or not destination_id:
+            raise ValueError("Trip planning requires origin and destination stop IDs")
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 10:
+            raise ValueError("NumberOfResults must be between 1 and 10")
+        now = datetime.now(ZoneInfo(self.get_timezone()))
+        departure = departure_time or now
+        if departure.tzinfo is None or departure.utcoffset() is None:
+            raise ValueError("Departure time must include a timezone")
+        return f'''<?xml version="1.0" encoding="UTF-8"?>
+<Trias version="{self.trias_version}" xmlns="http://www.vdv.de/trias" xmlns:siri="http://www.siri.org.uk/siri">
+  <ServiceRequest>
+    <siri:RequestTimestamp>{now.isoformat()}</siri:RequestTimestamp>
+    <siri:RequestorRef>{escape(self.requestor_ref)}</siri:RequestorRef>
+    <RequestPayload><TripRequest>
+      <Origin><LocationRef><StopPointRef>{escape(origin_id)}</StopPointRef></LocationRef><DepArrTime>{departure.isoformat()}</DepArrTime></Origin>
+      <Destination><LocationRef><StopPointRef>{escape(destination_id)}</StopPointRef></LocationRef></Destination>
+      <Params><NumberOfResults>{limit}</NumberOfResults><IncludeEstimatedTimes>true</IncludeEstimatedTimes></Params>
+    </TripRequest></RequestPayload>
+  </ServiceRequest>
+</Trias>'''
+
+    async def fetch_trips(
+        self, origin_id: str, destination_id: str, departure_time: Optional[datetime] = None, limit: int = 3
+    ) -> List[Dict[str, Any]]:
+        """Return trips with ISO timestamps and durations in seconds.
+
+        Timed, continuous and interchange legs are retained in travel order.
+        Provider availability must be verified before exposing this capability.
+        """
+        from .trias_trip import parse_trip_response
+
+        root = await self._post_trias(self._build_trip_request(origin_id, destination_id, departure_time, limit))
+        if root is None:
+            raise ApiResponseError(f"{self.provider_name}: missing TRIAS trip response")
+        return parse_trip_response(root, self.get_mode_mapping())
 
     async def _post_trias(self, xml_body: str) -> Optional[ET.Element]:
         headers = {"Content-Type": "text/xml; charset=utf-8", **self._extra_headers()}

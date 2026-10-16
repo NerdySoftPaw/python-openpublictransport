@@ -28,6 +28,7 @@ from ..const import (
     PROVIDER_VAGFR,
     PROVIDER_VBN_OTP,
     PROVIDER_VBN_TRIAS,
+    PROVIDER_CONNECT_TRIAS,
     PROVIDER_VGN,
     PROVIDER_VRN,
     PROVIDER_VRR,
@@ -67,6 +68,7 @@ from .trafiklab import TrafiklabProvider
 from .transitous import TransitousProvider
 from .vagfr import VAGFRProvider
 from .vbn import VBNOTPProvider, VBNTriasProvider
+from .connect import ConnectTriasProvider
 from .vgn import VGNProvider
 from .vrn import VRNProvider
 from .vrr import VRRProvider
@@ -152,6 +154,7 @@ register_provider(PROVIDER_TRANSITOUS, TransitousProvider)
 register_provider(PROVIDER_DB, DBProvider)
 register_provider(PROVIDER_VBN_OTP, VBNOTPProvider)
 register_provider(PROVIDER_VBN_TRIAS, VBNTriasProvider)
+register_provider(PROVIDER_CONNECT_TRIAS, ConnectTriasProvider)
 register_provider(PROVIDER_OPT, OPTProvider)
 register_provider(PROVIDER_OTP_CUSTOM, OTPCustomProvider)
 register_provider(PROVIDER_NATIONAL_RAIL, NationalRailProvider)
