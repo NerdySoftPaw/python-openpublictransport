@@ -59,6 +59,7 @@ PROVIDER_TFL = "tfl_uk"
 PROVIDER_TFNSW = "tfnsw_au"
 PROVIDER_DIGITRANSIT = "digitransit_fi"
 PROVIDER_GOLEMIO = "golemio_cz"
+PROVIDER_CTA_US = "cta_us"
 
 # API base URLs
 API_BASE_URL_VRR = "https://openservice.vrr.de/static03/XML_DM_REQUEST"

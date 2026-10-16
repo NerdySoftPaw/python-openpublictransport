@@ -10,6 +10,30 @@ from .models import UnifiedDeparture
 
 _LOGGER = logging.getLogger(__name__)
 
+# Train categories that are shown in front of a bare train number ("ICE 620").
+# Buses and trams are deliberately left out: "11" reads better than "Bus 11".
+RAIL_CATEGORIES = frozenset({
+    "ICE", "IC", "EC", "ECE", "EN", "NJ", "RJ", "RJX", "FLX", "TGV", "THA", "EST", "WB",
+    "IR", "IRE", "D", "RE", "RB", "MEX", "S",
+})
+
+
+def rail_line_label(number: str, name: str) -> str:
+    """Prefix a bare train number with its category taken from the long name.
+
+    EFA reports long-distance trains as ``number="620"`` and
+    ``name="ICE 620 InterCityExpress"``, so the board showed just "620".
+    Returns ``number`` unchanged unless it is purely numeric and ``name``
+    starts with a known rail category followed by that number.
+    """
+    if not number.isdigit() or not name:
+        return number
+    parts = name.split()
+    if len(parts) >= 2 and parts[1] == number and parts[0].upper() in RAIL_CATEGORIES:
+        return f"{parts[0]} {number}"
+    return number
+
+
 # Human-readable platform labels APIs prefix onto the bare track identifier:
 # "Gleis 3", "Bstg. 12", "Steig B", "Platform 4", "Pl. 2", "Track 1".
 _PLATFORM_LABEL_RE = re.compile(
@@ -102,7 +126,7 @@ def parse_departure_generic(
             destination_obj = {}
         destination = destination_obj.get("name", "Unknown")
 
-        line_number = str(transportation.get("number", ""))
+        line_number = rail_line_label(str(transportation.get("number", "")), str(transportation.get("name", "")))
         description = str(transportation.get("description", ""))
         agency = stop.get("agency")
 

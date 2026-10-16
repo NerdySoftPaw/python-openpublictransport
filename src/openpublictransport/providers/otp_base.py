@@ -57,6 +57,11 @@ class OTPBaseProvider(BaseProvider):
     # ISO country code(s) Nominatim restricts the stop-name geocoding to.
     geocode_countries: str = "de"
     stop_search_radius: int = 500
+    # How far ahead stoptimes are requested. The result is sorted and cut to the
+    # requested number of departures, so a wide window only matters for rarely
+    # served stops — with the former 2 h an hourly train showed one or two
+    # departures (issue #92).
+    stoptimes_time_range: int = 12 * 3600
 
     def get_timezone(self) -> str:
         return "Europe/Berlin"
@@ -167,7 +172,7 @@ class OTPBaseProvider(BaseProvider):
             self._get(
                 self._index_url(f"stops/{encoded_id}/stoptimes"),
                 {
-                    "timeRange": 7200,
+                    "timeRange": self.stoptimes_time_range,
                     "numberOfDepartures": max(departures_limit, 5),
                     "omitNonPickups": "true",
                 },

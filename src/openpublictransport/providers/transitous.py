@@ -16,6 +16,8 @@ _LOGGER = logging.getLogger(__name__)
 API_BASE = "https://api.transitous.org/api"
 USER_AGENT = "OpenPublicTransport/1.0 (github.com/NerdySoftPaw/openpublictransport)"
 
+_LONG_DISTANCE_MODES = frozenset({"HIGHSPEED_RAIL", "LONG_DISTANCE", "NIGHT_RAIL"})
+
 MODE_MAPPING = {
     "HIGHSPEED_RAIL": "train",
     "LONG_DISTANCE": "train",
@@ -113,6 +115,11 @@ class TransitousProvider(BaseProvider):
             transport_type = MODE_MAPPING.get(mode, "unknown")
 
             line = stop.get("routeShortName") or stop.get("displayName", "")
+            display_name = stop.get("displayName") or ""
+            if mode in _LONG_DISTANCE_MODES and line.isdigit() and display_name and not display_name.isdigit():
+                # Long-distance trains carry the DB line number ("29") as short
+                # name; the readable "ICE 1105" is only in displayName (issue #99).
+                line = display_name
             destination = stop.get("headsign", "Unknown")
 
             track = place.get("track", "")
