@@ -218,9 +218,10 @@ class EFABaseProvider(BaseProvider):
         url = f"{self.sf_base_url}?{params}"
         name = self.provider_name
 
-        # content_type=None: some deployments (VGN) send RapidJSON payloads with
-        # a "text/xml;;charset=utf-8" header (issue #79).
-        data = await self._request("get", url, timeout=10)
+        # Same User-Agent as the departure request: some EFA hosts throttle the
+        # bare aiohttp default (VRR answered it with HTTP 429).
+        headers = {"User-Agent": f"Mozilla/5.0 (compatible; OpenPublicTransport {self.provider_id.upper()})"}
+        data = await self._request("get", url, headers=headers, retries=2, timeout=10)
 
         if not isinstance(data, dict):
             raise ApiResponseError(f"{name}: API returned {type(data).__name__} instead of an object")

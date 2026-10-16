@@ -46,7 +46,7 @@ PROVIDER_VMT = "vmt"
 PROVIDER_SAARVV = "saarvv"
 
 # API base URLs
-API_BASE_URL_VRR = "https://openservice-test.vrr.de/static03/XML_DM_REQUEST"
+API_BASE_URL_VRR = "https://openservice.vrr.de/static03/XML_DM_REQUEST"
 API_BASE_URL_KVV = "https://projekte.kvv-efa.de/sl3-alone/XSLT_DM_REQUEST"
 API_BASE_URL_HVV = "https://hvv.efa.de/efa/XML_DM_REQUEST"
 API_BASE_URL_TRAFIKLAB = "https://realtime-api.trafiklab.se/v1"
