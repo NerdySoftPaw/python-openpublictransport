@@ -41,6 +41,12 @@ from ..const import (
     PROVIDER_DART_US,
     PROVIDER_IRISHRAIL_IE,
     PROVIDER_TPG_CH,
+    PROVIDER_VMV,
+    PROVIDER_GVH,
+    PROVIDER_NAHSH,
+    PROVIDER_INSA,
+    PROVIDER_VMT,
+    PROVIDER_SAARVV,
 )
 from .avv import AVVProvider
 from .base import BaseProvider
@@ -79,6 +85,12 @@ from .bart import BARTProvider
 from .dart import DARTProvider
 from .irishrail import IrishRailProvider
 from .tpg import TPGProvider
+from .vmv import VMVProvider
+from .gvh import GVHProvider
+from .nahsh import NAHSHProvider
+from .insa import INSAProvider
+from .vmt import VMTProvider
+from .saarvv import SaarVVProvider
 
 _PROVIDER_REGISTRY: Dict[str, Type[BaseProvider]] = {}
 
@@ -160,4 +172,10 @@ register_provider(PROVIDER_BART_US, BARTProvider)
 register_provider(PROVIDER_DART_US, DARTProvider)
 register_provider(PROVIDER_IRISHRAIL_IE, IrishRailProvider)
 register_provider(PROVIDER_TPG_CH, TPGProvider)
+register_provider(PROVIDER_VMV, VMVProvider)
+register_provider(PROVIDER_GVH, GVHProvider)
+register_provider(PROVIDER_NAHSH, NAHSHProvider)
+register_provider(PROVIDER_INSA, INSAProvider)
+register_provider(PROVIDER_VMT, VMTProvider)
+register_provider(PROVIDER_SAARVV, SaarVVProvider)
 register_provider(PROVIDER_HVV_GTI, HVVGTIProvider)

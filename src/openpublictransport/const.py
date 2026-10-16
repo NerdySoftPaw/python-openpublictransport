@@ -38,6 +38,12 @@ PROVIDER_BART_US = "bart_us"
 PROVIDER_DART_US = "dart_us"
 PROVIDER_IRISHRAIL_IE = "irishrail_ie"
 PROVIDER_TPG_CH = "tpg_ch"
+PROVIDER_VMV = "vmv"
+PROVIDER_GVH = "gvh"
+PROVIDER_NAHSH = "nahsh"
+PROVIDER_INSA = "insa"
+PROVIDER_VMT = "vmt"
+PROVIDER_SAARVV = "saarvv"
 
 # API base URLs
 API_BASE_URL_VRR = "https://openservice-test.vrr.de/static03/XML_DM_REQUEST"
