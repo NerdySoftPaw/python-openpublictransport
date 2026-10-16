@@ -34,6 +34,13 @@ def rail_line_label(number: str, name: str) -> str:
     return number
 
 
+# EFA hint types that carry routine timetable or vehicle information ("bicycles
+# limited", "wheelchair accessible", "on-board restaurant") rather than a
+# disruption. Infos (lineInfo, stopBlocking, …) and real-time hints such as
+# RTIncidentCall ("delay of a preceding train") are disruptions.
+EFA_ROUTINE_HINT_TYPES = frozenset({"Timetable", "VehicleType"})
+
+
 # Human-readable platform labels APIs prefix onto the bare track identifier:
 # "Gleis 3", "Bstg. 12", "Steig B", "Platform 4", "Pl. 2", "Track 1".
 _PLATFORM_LABEL_RE = re.compile(
@@ -140,16 +147,20 @@ def parse_departure_generic(
         is_realtime = get_realtime_fn(stop, estimated_time_str, planned_time_str)
 
         notices = []
+        disruptions = []
         for info in stop.get("infos", []):
             if isinstance(info, dict):
                 text = info.get("subtitle") or info.get("title") or info.get("content", "")
                 if text and isinstance(text, str):
                     notices.append(text.strip())
+                    disruptions.append(text.strip())
         for hint in stop.get("hints", []):
             if isinstance(hint, dict):
                 text = hint.get("content") or hint.get("text", "")
                 if text and isinstance(text, str):
                     notices.append(text.strip())
+                    if hint.get("type") not in EFA_ROUTINE_HINT_TYPES:
+                        disruptions.append(text.strip())
 
         planned_fn = get_planned_platform_fn or _default_planned_platform_fn
         planned_platform = planned_fn(stop)
@@ -174,6 +185,7 @@ def parse_departure_generic(
             description=description if description else None,
             agency=agency if agency else None,
             notices=notices if notices else None,
+            disruptions=disruptions if notices else None,
             planned_platform=str(planned_platform).strip() if planned_platform and platform_changed else None,
             platform_changed=platform_changed,
             platform_name=str(platform_name).strip() or None,

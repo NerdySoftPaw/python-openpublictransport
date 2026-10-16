@@ -36,6 +36,10 @@ class UnifiedDeparture:
     description: Optional[str] = None
     agency: Optional[str] = None
     notices: Optional[list[str]] = None
+    # The subset of ``notices`` that reports an actual disruption, as opposed
+    # to routine information such as bicycle rules or on-board facilities.
+    # None means the provider does not tell them apart: every notice counts.
+    disruptions: Optional[list[str]] = None
     planned_platform: Optional[str] = None
     platform_changed: bool = False
     # Human-readable form of `platform` when the provider offers one
@@ -63,6 +67,9 @@ class UnifiedDeparture:
             result["agency"] = self.agency
         if self.notices:
             result["notices"] = self.notices
+            # Always present next to the notices, even when empty, so consumers
+            # can tell "no disruption" apart from an older payload without it.
+            result["disruptions"] = self.notices if self.disruptions is None else self.disruptions
         if self.platform_name and self.platform_name != self.platform:
             result["platform_name"] = self.platform_name
         if self.platform_changed:
