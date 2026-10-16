@@ -122,7 +122,7 @@ class EFABaseProvider(BaseProvider):
         """Fetch departure data from EFA API."""
         if station_id:
             params = (
-                f"outputFormat=RapidJSON&"
+                f"outputFormat=rapidJSON&"
                 f"stateless=1&"
                 f"type_dm=any&"
                 f"name_dm={station_id}&"
@@ -132,7 +132,7 @@ class EFABaseProvider(BaseProvider):
             )
         else:
             params = (
-                f"outputFormat=RapidJSON&"
+                f"outputFormat=rapidJSON&"
                 f"place_dm={place_dm}&"
                 f"type_dm=stop&"
                 f"name_dm={name_dm}&"
@@ -199,7 +199,7 @@ class EFABaseProvider(BaseProvider):
             stop_name = parts[0].strip()
             place_name = parts[1].strip()
             params = (
-                f"outputFormat=RapidJSON&"
+                f"outputFormat=rapidJSON&"
                 f"locationServerActive=1&"
                 f"type_sf=any&"
                 f"name_sf={quote(stop_name, safe='')}&"
@@ -208,7 +208,7 @@ class EFABaseProvider(BaseProvider):
             )
         else:
             params = (
-                f"outputFormat=RapidJSON&"
+                f"outputFormat=rapidJSON&"
                 f"locationServerActive=1&"
                 f"type_sf=stop&"
                 f"name_sf={quote(search_term, safe='')}&"
