@@ -141,7 +141,7 @@ class OTPBaseProvider(BaseProvider):
             {
                 "id": s["id"],
                 "name": s.get("name", ""),
-                "place": s.get("name", ""),
+                "place": "",
                 "area_type": "stop",
             }
             for s in sorted(data, key=lambda x: x.get("dist", 0))
