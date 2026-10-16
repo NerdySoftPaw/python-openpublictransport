@@ -18,7 +18,6 @@ from ..const import (
     PROVIDER_NVBW,
     PROVIDER_NWL,
     PROVIDER_OEBB,
-    PROVIDER_OPT,
     PROVIDER_OTP_CUSTOM,
     PROVIDER_RMV,
     PROVIDER_RVV,
@@ -42,6 +41,27 @@ from ..const import (
     PROVIDER_DART_US,
     PROVIDER_IRISHRAIL_IE,
     PROVIDER_TPG_CH,
+    PROVIDER_VMV,
+    PROVIDER_GVH,
+    PROVIDER_NAHSH,
+    PROVIDER_INSA,
+    PROVIDER_VMT,
+    PROVIDER_SAARVV,
+    PROVIDER_VBN_HAFAS,
+    PROVIDER_NVV,
+    PROVIDER_VOS,
+    PROVIDER_VSN,
+    PROVIDER_VAO_AT,
+    PROVIDER_TRIMET_US,
+    PROVIDER_IRAIL_BE,
+    PROVIDER_SL_SE,
+    PROVIDER_TTC_CA,
+    PROVIDER_HONGKONG,
+    PROVIDER_WIENERLINIEN,
+    PROVIDER_TFL,
+    PROVIDER_TFNSW,
+    PROVIDER_DIGITRANSIT,
+    PROVIDER_GOLEMIO,
 )
 from .avv import AVVProvider
 from .base import BaseProvider
@@ -50,7 +70,6 @@ from .bsvg import BSVGProvider
 from .bvg import BVGProvider
 from .db import DBProvider
 from .ding import DINGProvider
-from .gtfsde import OPTProvider
 from .hvv import HVVProvider
 from .hvv_gti import HVVGTIProvider
 from .kvv import KVVProvider
@@ -81,6 +100,27 @@ from .bart import BARTProvider
 from .dart import DARTProvider
 from .irishrail import IrishRailProvider
 from .tpg import TPGProvider
+from .vmv import VMVProvider
+from .gvh import GVHProvider
+from .nahsh import NAHSHProvider
+from .insa import INSAProvider
+from .vmt import VMTProvider
+from .saarvv import SaarVVProvider
+from .vbn_hafas import VBNHafasProvider
+from .nvv import NVVProvider
+from .vos import VOSProvider
+from .vsn import VSNProvider
+from .vao import VAOProvider
+from .trimet import TriMetProvider
+from .irail import IRailProvider
+from .sl import SLProvider
+from .ttc import TTCProvider
+from .hongkong import HongKongProvider
+from .wienerlinien import WienerLinienProvider
+from .tfl import TfLProvider
+from .tfnsw import TfNSWProvider
+from .digitransit import DigitransitProvider
+from .golemio import GolemioProvider
 
 _PROVIDER_REGISTRY: Dict[str, Type[BaseProvider]] = {}
 
@@ -152,7 +192,6 @@ register_provider(PROVIDER_TRANSITOUS, TransitousProvider)
 register_provider(PROVIDER_DB, DBProvider)
 register_provider(PROVIDER_VBN_OTP, VBNOTPProvider)
 register_provider(PROVIDER_VBN_TRIAS, VBNTriasProvider)
-register_provider(PROVIDER_OPT, OPTProvider)
 register_provider(PROVIDER_OTP_CUSTOM, OTPCustomProvider)
 register_provider(PROVIDER_NATIONAL_RAIL, NationalRailProvider)
 register_provider(PROVIDER_REJSEPLANEN, RejseplanenProvider)
@@ -163,4 +202,25 @@ register_provider(PROVIDER_BART_US, BARTProvider)
 register_provider(PROVIDER_DART_US, DARTProvider)
 register_provider(PROVIDER_IRISHRAIL_IE, IrishRailProvider)
 register_provider(PROVIDER_TPG_CH, TPGProvider)
+register_provider(PROVIDER_VMV, VMVProvider)
+register_provider(PROVIDER_GVH, GVHProvider)
+register_provider(PROVIDER_NAHSH, NAHSHProvider)
+register_provider(PROVIDER_INSA, INSAProvider)
+register_provider(PROVIDER_VMT, VMTProvider)
+register_provider(PROVIDER_SAARVV, SaarVVProvider)
+register_provider(PROVIDER_VBN_HAFAS, VBNHafasProvider)
+register_provider(PROVIDER_NVV, NVVProvider)
+register_provider(PROVIDER_VOS, VOSProvider)
+register_provider(PROVIDER_VSN, VSNProvider)
+register_provider(PROVIDER_VAO_AT, VAOProvider)
+register_provider(PROVIDER_TRIMET_US, TriMetProvider)
+register_provider(PROVIDER_IRAIL_BE, IRailProvider)
+register_provider(PROVIDER_SL_SE, SLProvider)
+register_provider(PROVIDER_TTC_CA, TTCProvider)
+register_provider(PROVIDER_HONGKONG, HongKongProvider)
+register_provider(PROVIDER_WIENERLINIEN, WienerLinienProvider)
+register_provider(PROVIDER_TFL, TfLProvider)
+register_provider(PROVIDER_TFNSW, TfNSWProvider)
+register_provider(PROVIDER_DIGITRANSIT, DigitransitProvider)
+register_provider(PROVIDER_GOLEMIO, GolemioProvider)
 register_provider(PROVIDER_HVV_GTI, HVVGTIProvider)

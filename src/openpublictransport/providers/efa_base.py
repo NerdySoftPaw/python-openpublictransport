@@ -122,7 +122,7 @@ class EFABaseProvider(BaseProvider):
         """Fetch departure data from EFA API."""
         if station_id:
             params = (
-                f"outputFormat=RapidJSON&"
+                f"outputFormat=rapidJSON&"
                 f"stateless=1&"
                 f"type_dm=any&"
                 f"name_dm={station_id}&"
@@ -132,7 +132,7 @@ class EFABaseProvider(BaseProvider):
             )
         else:
             params = (
-                f"outputFormat=RapidJSON&"
+                f"outputFormat=rapidJSON&"
                 f"place_dm={place_dm}&"
                 f"type_dm=stop&"
                 f"name_dm={name_dm}&"
@@ -199,7 +199,7 @@ class EFABaseProvider(BaseProvider):
             stop_name = parts[0].strip()
             place_name = parts[1].strip()
             params = (
-                f"outputFormat=RapidJSON&"
+                f"outputFormat=rapidJSON&"
                 f"locationServerActive=1&"
                 f"type_sf=any&"
                 f"name_sf={quote(stop_name, safe='')}&"
@@ -208,7 +208,7 @@ class EFABaseProvider(BaseProvider):
             )
         else:
             params = (
-                f"outputFormat=RapidJSON&"
+                f"outputFormat=rapidJSON&"
                 f"locationServerActive=1&"
                 f"type_sf=stop&"
                 f"name_sf={quote(search_term, safe='')}&"
@@ -218,9 +218,10 @@ class EFABaseProvider(BaseProvider):
         url = f"{self.sf_base_url}?{params}"
         name = self.provider_name
 
-        # content_type=None: some deployments (VGN) send RapidJSON payloads with
-        # a "text/xml;;charset=utf-8" header (issue #79).
-        data = await self._request("get", url, timeout=10)
+        # Same User-Agent as the departure request: some EFA hosts throttle the
+        # bare aiohttp default (VRR answered it with HTTP 429).
+        headers = {"User-Agent": f"Mozilla/5.0 (compatible; OpenPublicTransport {self.provider_id.upper()})"}
+        data = await self._request("get", url, headers=headers, retries=2, timeout=10)
 
         if not isinstance(data, dict):
             raise ApiResponseError(f"{name}: API returned {type(data).__name__} instead of an object")

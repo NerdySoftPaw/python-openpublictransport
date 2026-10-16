@@ -8,8 +8,9 @@ Responses use an indirection model: each journey references shared objects
 
 Some deployments additionally require a signed request (an MD5 ``checksum`` or a
 ``mic``/``mac`` pair derived from a salt). That is supported here via
-:attr:`checksum_salt` / :attr:`mic_mac_salt`, but every endpoint we currently
-ship is **unsigned** (no salt in the public-transport/transport-apis catalogue).
+:attr:`checksum_salt` / :attr:`mic_mac_salt`, given exactly as the
+public-transport/transport-apis catalogue lists them (hex), and signed the same
+way as hafas-client.
 
 A concrete provider sets :attr:`mgate_endpoint`, :attr:`mgate_auth`,
 :attr:`mgate_client`, :attr:`mgate_ver` and :attr:`timezone`. See
@@ -46,12 +47,22 @@ CATOUT_MAPPING: Dict[str, str] = {
     "FERRY": "ferry",
     "SHIP": "ferry",
     "BOAT": "ferry",
+    # German regional networks (VMT, INSA, …)
+    "STRAB": "tram",
+    "STRB": "tram",
+    "ZUG": "train",
+    "DRE": "train",
+    "ECE": "train",  # Eurocity-Express
+    "SEV": "bus",  # Schienenersatzverkehr (rail replacement bus)
+    "BSV": "bus",
 }
 
 # Substring fallbacks scanned against the lower-cased category when there is no
 # exact match (order matters: more specific first).
 _CATOUT_STEMS = [
     ("tram", "tram"),
+    ("straßenbahn", "tram"),
+    ("stadtbahn", "tram"),
     ("metro", "subway"),
     ("subway", "subway"),
     ("underground", "subway"),
@@ -64,6 +75,9 @@ _CATOUT_STEMS = [
     ("funicular", "train"),
     ("train", "train"),
     ("rail", "train"),
+    ("zug", "train"),
+    ("regional", "train"),
+    ("s-bahn", "train"),
 ]
 
 
@@ -92,6 +106,23 @@ def _hafas_datetime(
         return None
 
 
+def _salt_bytes(salt: str) -> bytes:
+    """Decode a signing salt like hafas-client: hex when it is hex, else UTF-8."""
+    try:
+        return bytes.fromhex(salt)
+    except ValueError:
+        return salt.encode("utf-8")
+
+
+def _duration_minutes(dur: str) -> int:
+    """Convert a HAFAS ``[dd]HHMMSS`` duration into minutes."""
+    if not dur or not dur.isdigit():
+        return 0
+    days = int(dur[:-6]) if len(dur) > 6 else 0
+    dur = dur[-6:].zfill(6)
+    return days * 1440 + int(dur[0:2]) * 60 + int(dur[2:4])
+
+
 def _platform(stb: Dict[str, Any], realtime: bool) -> str:
     """Extract a platform from a StationBoard stop, preferring realtime.
 
@@ -117,8 +148,10 @@ class HafasMgateBaseProvider(BaseProvider):
     mgate_client: Dict[str, Any] = {}
     mgate_ver: str = "1.18"
     mgate_lang: str = "en"
+    # Optional client extension id some deployments expect (e.g. "NVV.6.0").
+    mgate_ext: Optional[str] = None
     timezone: str = "Europe/Berlin"
-    # Optional request signing (unset for every endpoint we ship).
+    # Optional request signing; salts as hex strings from the catalogue.
     checksum_salt: Optional[str] = None
     mic_mac_salt: Optional[str] = None
 
@@ -142,6 +175,8 @@ class HafasMgateBaseProvider(BaseProvider):
             "auth": self.mgate_auth,
             "formatted": False,
         }
+        if self.mgate_ext:
+            body["ext"] = self.mgate_ext
         raw = json.dumps(body, separators=(",", ":")).encode("utf-8")
         url = self.mgate_endpoint + self._signature_query(raw)
 
@@ -167,11 +202,11 @@ class HafasMgateBaseProvider(BaseProvider):
 
     def _signature_query(self, raw: bytes) -> str:
         if self.checksum_salt:
-            checksum = hashlib.md5(raw + self.checksum_salt.encode("utf-8")).hexdigest()
+            checksum = hashlib.md5(raw + _salt_bytes(self.checksum_salt)).hexdigest()
             return f"?checksum={checksum}"
         if self.mic_mac_salt:
             mic = hashlib.md5(raw).hexdigest()
-            mac = hashlib.md5(mic.encode("utf-8") + self.mic_mac_salt.encode("utf-8")).hexdigest()
+            mac = hashlib.md5(mic.encode("utf-8") + _salt_bytes(self.mic_mac_salt)).hexdigest()
             return f"?mic={mic}&mac={mac}"
         return ""
 
@@ -281,16 +316,114 @@ class HafasMgateBaseProvider(BaseProvider):
             _LOGGER.debug("Error parsing %s mgate departure: %s", self.provider_name, e)
             return None
 
+    @staticmethod
+    def _location(stop_id: str) -> Dict[str, Any]:
+        """mgate location reference for a stop id from :meth:`search_stops`."""
+        return {"lid": stop_id} if "@" in stop_id or "=" in stop_id else {"type": "S", "extId": stop_id}
+
+    async def search_trips(
+        self,
+        origin_id: str,
+        destination_id: str,
+        departure_time: Optional[datetime] = None,
+        results: int = 4,
+    ) -> List[Dict[str, Any]]:
+        """Plan journeys between two stops with the mgate ``TripSearch`` service.
+
+        ``departure_time`` is converted to the network's time zone; without it
+        the search starts now. Returns one dict per connection::
+
+            {"duration_minutes": int, "transfers": int, "legs": [leg, ...]}
+
+        Each leg carries ``mode`` ("transit" or "walk"), ``origin``,
+        ``destination``, ``line``, ``product``, ``transport_type``, ``direction``,
+        ``platform``, ``cancelled`` and the timezone-aware datetimes
+        ``departure_planned`` / ``departure`` / ``arrival_planned`` / ``arrival``
+        (the unprefixed ones are real-time when the network reports it).
+        """
+        tz = ZoneInfo(self.timezone)
+        when = (departure_time or datetime.now(tz)).astimezone(tz)
+        svc = {
+            "meth": "TripSearch",
+            "req": {
+                "depLocL": [self._location(origin_id)],
+                "arrLocL": [self._location(destination_id)],
+                "outDate": when.strftime("%Y%m%d"),
+                "outTime": when.strftime("%H%M%S"),
+                "outFrwd": True,
+                "numF": results,
+                "getPasslist": False,
+                "getPolyline": False,
+            },
+        }
+        res = await self._mgate_request(svc)
+        if not res:
+            return []
+
+        common = res.get("common") or {}
+        locs = common.get("locL") or []
+        prods = common.get("prodL") or []
+
+        def pick(items: List[Dict[str, Any]], index: Any) -> Dict[str, Any]:
+            return items[index] if isinstance(index, int) and 0 <= index < len(items) else {}
+
+        trips = []
+        for con in res.get("outConL") or []:
+            date_str = con.get("date", "")
+            legs = []
+            for sec in con.get("secL") or []:
+                dep = sec.get("dep") or {}
+                arr = sec.get("arr") or {}
+                jny = sec.get("jny") or {}
+                is_transit = sec.get("type") == "JNY"
+                prod = pick(prods, jny.get("prodX")) if is_transit else {}
+                ctx = prod.get("prodCtx") or {}
+                dep_planned = _hafas_datetime(date_str, dep.get("dTimeS", ""), tz)
+                arr_planned = _hafas_datetime(date_str, arr.get("aTimeS", ""), tz)
+                if not dep_planned or not arr_planned:
+                    continue
+                legs.append(
+                    {
+                        "mode": "transit" if is_transit else "walk",
+                        "origin": pick(locs, dep.get("locX")).get("name", ""),
+                        "destination": pick(locs, arr.get("locX")).get("name", ""),
+                        "line": (prod.get("name") or prod.get("nameS") or "").strip(),
+                        "product": (ctx.get("catOutL") or ctx.get("catOut") or "").strip(),
+                        "transport_type": self._transport_type(prod) if is_transit else "walk",
+                        "direction": jny.get("dirTxt", ""),
+                        "platform": _platform(dep, bool(dep.get("dTimeR"))),
+                        "cancelled": bool(jny.get("isCncl") or dep.get("dCncl") or arr.get("aCncl")),
+                        "departure_planned": dep_planned,
+                        "departure": _hafas_datetime(date_str, dep.get("dTimeR", ""), tz) or dep_planned,
+                        "arrival_planned": arr_planned,
+                        "arrival": _hafas_datetime(date_str, arr.get("aTimeR", ""), tz) or arr_planned,
+                    }
+                )
+            if not any(leg["mode"] == "transit" for leg in legs):
+                continue
+            trips.append(
+                {
+                    "duration_minutes": _duration_minutes(con.get("dur", "")),
+                    "transfers": int(con.get("chg") or 0),
+                    "legs": legs,
+                }
+            )
+        return trips
+
     def _transport_type(self, prod: Dict[str, Any]) -> str:
-        catout = (prod.get("prodCtx", {}).get("catOut") or "").strip()
+        ctx = prod.get("prodCtx", {})
+        catout = (ctx.get("catOut") or "").strip()
         mapping = self.get_catout_mapping()
         key = catout.upper()
         if key in mapping:
             return mapping[key]
-        low = catout.lower()
-        for stem, typ in _CATOUT_STEMS:
-            if stem in low:
-                return typ
+        # Fall back to the stems, first on the short and then on the long label
+        # ("Strab" / "Straßenbahn").
+        for label in (catout, (ctx.get("catOutL") or "").strip()):
+            low = label.lower()
+            for stem, typ in _CATOUT_STEMS:
+                if stem in low:
+                    return typ
         return "unknown"
 
 

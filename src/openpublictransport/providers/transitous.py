@@ -170,6 +170,7 @@ class TransitousProvider(BaseProvider):
                     "name": location.get("name", ""),
                     "place": "",
                     "area_type": "stop",
+                    "country": location.get("country", ""),
                 }
             )
         return results

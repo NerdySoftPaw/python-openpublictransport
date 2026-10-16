@@ -32,6 +32,14 @@ CATEGORY_MAPPING = {
     "FAE": "ferry",
     "M": "subway",
     "FUN": "train",
+    "R": "train",
+    "IRE": "train",
+    "PE": "train",
+    "EXT": "train",
+    "SN": "train",
+    "EN": "train",
+    "NJ": "train",
+    "TER": "train",
 }
 
 
@@ -81,18 +89,21 @@ class SBBProvider(BaseProvider):
     ) -> Optional[UnifiedDeparture]:
         try:
             stop_info = stop.get("stop", {})
-            dep_str = stop_info.get("departure")
-            if not dep_str:
+            # transport.opendata.ch: stop.departure is the timetable time, the
+            # forecast lives in prognosis.departure; delay is in minutes.
+            planned_dt = _parse_dt(stop_info.get("departure") or "")
+            if not planned_dt:
                 return None
 
-            dep_dt = _parse_dt(dep_str)
-            if not dep_dt:
-                return None
-
-            dep_local = dep_dt.astimezone(tz)
+            planned_local = planned_dt.astimezone(tz)
             delay_min = stop_info.get("delay") or 0
-
-            planned_local = dep_local - timedelta(minutes=delay_min)
+            prognosis_dt = _parse_dt((stop_info.get("prognosis") or {}).get("departure") or "")
+            if prognosis_dt:
+                dep_local = prognosis_dt.astimezone(tz)
+                if not stop_info.get("delay"):
+                    delay_min = max(0, round((dep_local - planned_local).total_seconds() / 60))
+            else:
+                dep_local = planned_local + timedelta(minutes=delay_min)
 
             category = stop.get("category", "")
             number = stop.get("number", "")
@@ -105,9 +116,9 @@ class SBBProvider(BaseProvider):
             time_diff = dep_local - now
             minutes_until = max(0, int(time_diff.total_seconds() / 60))
 
-            is_realtime = stop_info.get("prognosis", {}).get("departure") is not None
+            is_realtime = prognosis_dt is not None
 
-            prognosis_platform = stop_info.get("prognosis", {}).get("platform")
+            prognosis_platform = (stop_info.get("prognosis") or {}).get("platform")
             platform_changed = bool(prognosis_platform and platform and prognosis_platform != platform)
             planned_platform = platform if platform_changed else None
             if prognosis_platform:

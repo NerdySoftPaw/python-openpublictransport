@@ -19,11 +19,11 @@ class VRRProvider(EFABaseProvider):
 
     @property
     def dm_base_url(self) -> str:
-        return "https://openservice-test.vrr.de/static03/XML_DM_REQUEST"
+        return "https://openservice.vrr.de/static03/XML_DM_REQUEST"
 
     @property
     def sf_base_url(self) -> str:
-        return "https://openservice-test.vrr.de/static03/XML_STOPFINDER_REQUEST"
+        return "https://openservice.vrr.de/static03/XML_STOPFINDER_REQUEST"
 
     def get_timezone(self) -> str:
         return "Europe/Berlin"
