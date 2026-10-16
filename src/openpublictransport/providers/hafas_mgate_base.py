@@ -327,11 +327,15 @@ class HafasMgateBaseProvider(BaseProvider):
         destination_id: str,
         departure_time: Optional[datetime] = None,
         results: int = 4,
+        arrival_time: Optional[datetime] = None,
     ) -> List[Dict[str, Any]]:
         """Plan journeys between two stops with the mgate ``TripSearch`` service.
 
         ``departure_time`` is converted to the network's time zone; without it
-        the search starts now. Returns one dict per connection::
+        the search starts now. ``arrival_time`` switches to an "arrive by"
+        search instead (like hafas-client's ``arrival`` option, ``outFrwd``
+        false): the connections that arrive by then. It wins over
+        ``departure_time``. Returns one dict per connection::
 
             {"duration_minutes": int, "transfers": int, "legs": [leg, ...]}
 
@@ -342,7 +346,7 @@ class HafasMgateBaseProvider(BaseProvider):
         (the unprefixed ones are real-time when the network reports it).
         """
         tz = ZoneInfo(self.timezone)
-        when = (departure_time or datetime.now(tz)).astimezone(tz)
+        when = (arrival_time or departure_time or datetime.now(tz)).astimezone(tz)
         svc = {
             "meth": "TripSearch",
             "req": {
@@ -350,7 +354,7 @@ class HafasMgateBaseProvider(BaseProvider):
                 "arrLocL": [self._location(destination_id)],
                 "outDate": when.strftime("%Y%m%d"),
                 "outTime": when.strftime("%H%M%S"),
-                "outFrwd": True,
+                "outFrwd": arrival_time is None,
                 "numF": results,
                 "getPasslist": False,
                 "getPolyline": False,
