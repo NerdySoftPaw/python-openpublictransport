@@ -221,3 +221,24 @@ async def test_search_trips_departure_stays_forward():
     provider._request = AsyncMock(return_value={"svcResL": [{"res": {}}]})
     await provider.search_trips("A=1@L=1@", "A=1@L=2@")
     assert json.loads(provider._request.call_args.kwargs["data"])["svcReqL"][0]["req"]["outFrwd"] is True
+
+
+async def test_search_trips_via_with_dwell_time():
+    """A via stop goes into viaLocL; a dwell time becomes its minimum stay."""
+    provider = NAHSHProvider(session=None)
+    provider._request = AsyncMock(return_value={"svcResL": [{"res": {}}]})
+
+    await provider.search_trips("A=1@L=1@", "A=1@L=2@", via_id="A=1@L=3@", via_dwell_minutes=30)
+    req = json.loads(provider._request.call_args.kwargs["data"])["svcReqL"][0]["req"]
+    assert req["viaLocL"] == [{"loc": {"lid": "A=1@L=3@"}, "min": 30}]
+
+    await provider.search_trips("A=1@L=1@", "A=1@L=2@", via_id="8000323")
+    req = json.loads(provider._request.call_args.kwargs["data"])["svcReqL"][0]["req"]
+    assert req["viaLocL"] == [{"loc": {"type": "S", "extId": "8000323"}}]
+
+
+async def test_search_trips_without_via_sends_no_via():
+    provider = NAHSHProvider(session=None)
+    provider._request = AsyncMock(return_value={"svcResL": [{"res": {}}]})
+    await provider.search_trips("A=1@L=1@", "A=1@L=2@", via_dwell_minutes=15)
+    assert "viaLocL" not in json.loads(provider._request.call_args.kwargs["data"])["svcReqL"][0]["req"]
