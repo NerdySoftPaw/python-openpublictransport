@@ -328,6 +328,8 @@ class HafasMgateBaseProvider(BaseProvider):
         departure_time: Optional[datetime] = None,
         results: int = 4,
         arrival_time: Optional[datetime] = None,
+        via_id: Optional[str] = None,
+        via_dwell_minutes: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Plan journeys between two stops with the mgate ``TripSearch`` service.
 
@@ -335,7 +337,12 @@ class HafasMgateBaseProvider(BaseProvider):
         the search starts now. ``arrival_time`` switches to an "arrive by"
         search instead (like hafas-client's ``arrival`` option, ``outFrwd``
         false): the connections that arrive by then. It wins over
-        ``departure_time``. Returns one dict per connection::
+        ``departure_time``.
+
+        ``via_id`` routes every connection through that stop (mgate
+        ``viaLocL``); ``via_dwell_minutes`` asks for at least that long a stay
+        there (the entry's ``min``). Without a via the dwell time is ignored.
+        Returns one dict per connection::
 
             {"duration_minutes": int, "transfers": int, "legs": [leg, ...]}
 
@@ -360,6 +367,11 @@ class HafasMgateBaseProvider(BaseProvider):
                 "getPolyline": False,
             },
         }
+        if via_id:
+            via: Dict[str, Any] = {"loc": self._location(via_id)}
+            if via_dwell_minutes and via_dwell_minutes > 0:
+                via["min"] = int(via_dwell_minutes)
+            svc["req"]["viaLocL"] = [via]
         res = await self._mgate_request(svc)
         if not res:
             return []
